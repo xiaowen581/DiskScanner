@@ -25,6 +25,8 @@ from disk_scanner import (
     format_size, format_time, parse_size_filter, truncate, pad,
     Scanner, sort_nodes, SORT_MODES, SORT_MODE_KEYS,
     export_csv, export_json,
+    apply_filters, build_parser, C,
+    get_terminal_width, get_terminal_height,
 )
 
 
@@ -750,6 +752,334 @@ class TestScanAndFilter(unittest.TestCase):
         self.assertEqual(len(top2), 2)
         self.assertEqual(top2[0].size, 5000)
         self.assertEqual(top2[1].size, 3000)
+
+
+# ════════════════════════════════════════════════════
+#  测试 apply_filters
+# ════════════════════════════════════════════════════
+
+class TestApplyFilters(unittest.TestCase):
+    """测试 apply_filters() 过滤函数"""
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp(prefix="diskscanner_applyfilter_")
+        for name, size in [("small.txt", 100), ("big.mp4", 5000),
+                           ("mid.py", 1000), ("doc.pdf", 3000)]:
+            with open(os.path.join(self.tmpdir, name), 'wb') as f:
+                f.write(b'\x00' * size)
+        scanner = Scanner()
+        self.result = scanner.scan(self.tmpdir)
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def test_no_filter_returns_same(self):
+        """无过滤条件应返回原结果"""
+        filtered = apply_filters(self.result, 0, [])
+        self.assertEqual(filtered.total_files, self.result.total_files)
+        self.assertEqual(filtered.total_size, self.result.total_size)
+
+    def test_min_size_filter(self):
+        """最小文件大小过滤"""
+        filtered = apply_filters(self.result, 2000, [])
+        self.assertEqual(filtered.total_files, 2)
+        names = [f.name for f in filtered.all_files]
+        self.assertIn("big.mp4", names)
+        self.assertIn("doc.pdf", names)
+
+    def test_ext_filter(self):
+        """扩展名过滤"""
+        filtered = apply_filters(self.result, 0, [".mp4"])
+        self.assertEqual(filtered.total_files, 1)
+        self.assertEqual(filtered.all_files[0].name, "big.mp4")
+
+    def test_combined_filter(self):
+        """组合过滤"""
+        filtered = apply_filters(self.result, 2000, [".pdf"])
+        self.assertEqual(filtered.total_files, 1)
+        self.assertEqual(filtered.all_files[0].name, "doc.pdf")
+
+    def test_filter_no_match(self):
+        """过滤无匹配结果"""
+        filtered = apply_filters(self.result, 0, [".xyz"])
+        self.assertEqual(filtered.total_files, 0)
+        self.assertEqual(filtered.all_files, [])
+
+    def test_filter_preserves_root(self):
+        """过滤后 root 应保留"""
+        filtered = apply_filters(self.result, 2000, [])
+        self.assertEqual(filtered.root, self.result.root)
+
+    def test_filter_preserves_scan_duration(self):
+        """过滤后 scan_duration 应保留"""
+        filtered = apply_filters(self.result, 2000, [])
+        self.assertEqual(filtered.scan_duration, self.result.scan_duration)
+
+    def test_filter_total_size_recalculated(self):
+        """过滤后 total_size 应重新计算"""
+        filtered = apply_filters(self.result, 2000, [])
+        expected = sum(f.size for f in filtered.all_files)
+        self.assertEqual(filtered.total_size, expected)
+
+    def test_filter_dirs_limited(self):
+        """过滤后 all_dirs 应只包含相关文件所在目录"""
+        filtered = apply_filters(self.result, 0, [".mp4"])
+        # 至少根目录应在
+        self.assertGreaterEqual(len(filtered.all_dirs), 1)
+
+
+# ════════════════════════════════════════════════════
+#  测试 build_parser
+# ════════════════════════════════════════════════════
+
+class TestBuildParser(unittest.TestCase):
+    """测试 build_parser() 参数解析"""
+
+    def test_parser_creation(self):
+        parser = build_parser()
+        self.assertIsNotNone(parser)
+
+    def test_default_args(self):
+        parser = build_parser()
+        args = parser.parse_args([])
+        self.assertEqual(args.path, ".")
+        self.assertEqual(args.top, 0)
+        self.assertEqual(args.min_size, "")
+        self.assertEqual(args.ext, "")
+        self.assertEqual(args.sort, "size")
+        self.assertEqual(args.order, "desc")
+        self.assertEqual(args.export, "")
+        self.assertFalse(args.no_interactive)
+        self.assertFalse(args.follow_symlinks)
+
+    def test_path_argument(self):
+        parser = build_parser()
+        args = parser.parse_args(["/tmp"])
+        self.assertEqual(args.path, "/tmp")
+
+    def test_top_n(self):
+        parser = build_parser()
+        args = parser.parse_args(["-n", "20"])
+        self.assertEqual(args.top, 20)
+
+    def test_min_size(self):
+        parser = build_parser()
+        args = parser.parse_args(["--min-size", "100MB"])
+        self.assertEqual(args.min_size, "100MB")
+
+    def test_ext_filter(self):
+        parser = build_parser()
+        args = parser.parse_args(["--ext", ".mp4,.mkv"])
+        self.assertEqual(args.ext, ".mp4,.mkv")
+
+    def test_sort_and_order(self):
+        parser = build_parser()
+        args = parser.parse_args(["--sort", "name", "--order", "asc"])
+        self.assertEqual(args.sort, "name")
+        self.assertEqual(args.order, "asc")
+
+    def test_export(self):
+        parser = build_parser()
+        args = parser.parse_args(["--export", "report.csv"])
+        self.assertEqual(args.export, "report.csv")
+
+    def test_no_interactive(self):
+        parser = build_parser()
+        args = parser.parse_args(["--no-interactive"])
+        self.assertTrue(args.no_interactive)
+
+    def test_follow_symlinks(self):
+        parser = build_parser()
+        args = parser.parse_args(["--follow-symlinks"])
+        self.assertTrue(args.follow_symlinks)
+
+    def test_combined_args(self):
+        parser = build_parser()
+        args = parser.parse_args(["/home", "-n", "10", "--min-size", "1GB",
+                                  "--ext", ".mp4", "--no-interactive"])
+        self.assertEqual(args.path, "/home")
+        self.assertEqual(args.top, 10)
+        self.assertEqual(args.min_size, "1GB")
+        self.assertEqual(args.ext, ".mp4")
+        self.assertTrue(args.no_interactive)
+
+
+# ════════════════════════════════════════════════════
+#  测试 C 颜色类
+# ════════════════════════════════════════════════════
+
+class TestColorClass(unittest.TestCase):
+    """测试 ANSI 颜色类 C"""
+
+    def test_color_constants_exist(self):
+        """颜色常量应存在"""
+        self.assertIsNotNone(C.RESET)
+        self.assertIsNotNone(C.BOLD)
+        self.assertIsNotNone(C.RED)
+        self.assertIsNotNone(C.GREEN)
+
+    def test_disable_clears_colors(self):
+        """disable() 应清空所有颜色字符串"""
+        # 保存原始值
+        originals = {}
+        for attr in dir(C):
+            if not attr.startswith('_') and attr != 'disable' and isinstance(getattr(C, attr), str):
+                originals[attr] = getattr(C, attr)
+
+        C.disable()
+
+        for attr in originals:
+            self.assertEqual(getattr(C, attr), '',
+                             f"C.{attr} 应为空字符串")
+
+        # 恢复原始值
+        for attr, val in originals.items():
+            setattr(C, attr, val)
+
+
+# ════════════════════════════════════════════════════
+#  测试终端工具函数
+# ════════════════════════════════════════════════════
+
+class TestTerminalUtils(unittest.TestCase):
+    """测试终端工具函数"""
+
+    def test_get_terminal_width(self):
+        """get_terminal_width 应返回正整数"""
+        w = get_terminal_width()
+        self.assertIsInstance(w, int)
+        self.assertGreater(w, 0)
+
+    def test_get_terminal_height(self):
+        """get_terminal_height 应返回正整数"""
+        h = get_terminal_height()
+        self.assertIsInstance(h, int)
+        self.assertGreater(h, 0)
+
+
+# ════════════════════════════════════════════════════
+#  测试排序进阶
+# ════════════════════════════════════════════════════
+
+class TestSortNodesAdvanced(unittest.TestCase):
+    """测试更多排序模式"""
+
+    def setUp(self):
+        self.files = [
+            FileNode("alpha.txt", "/z/alpha.txt", 100, 1000.0, ".txt"),
+            FileNode("beta.mp4", "/a/beta.mp4", 5000, 3000.0, ".mp4"),
+            FileNode("gamma.py", "/m/gamma.py", 1000, 2000.0, ".py"),
+        ]
+
+    def test_name_desc(self):
+        result = sort_nodes(self.files, "name-desc")
+        names = [n.name for n in result]
+        self.assertEqual(names, ["gamma.py", "beta.mp4", "alpha.txt"])
+
+    def test_modified_asc(self):
+        result = sort_nodes(self.files, "modified-asc")
+        times = [n.modified for n in result]
+        self.assertEqual(times, [1000.0, 2000.0, 3000.0])
+
+    def test_path_sort(self):
+        result = sort_nodes(self.files, "path")
+        paths = [n.path for n in result]
+        self.assertEqual(paths, ["/a/beta.mp4", "/m/gamma.py", "/z/alpha.txt"])
+
+    def test_path_desc(self):
+        result = sort_nodes(self.files, "path-desc")
+        paths = [n.path for n in result]
+        self.assertEqual(paths, ["/z/alpha.txt", "/m/gamma.py", "/a/beta.mp4"])
+
+    def test_ext_sort(self):
+        result = sort_nodes(self.files, "ext")
+        exts = [n.extension for n in result]
+        self.assertEqual(exts, [".mp4", ".py", ".txt"])
+
+    def test_ext_desc(self):
+        result = sort_nodes(self.files, "ext-desc")
+        exts = [n.extension for n in result]
+        self.assertEqual(exts, [".txt", ".py", ".mp4"])
+
+    def test_files_desc_dirs(self):
+        """file_count 排序适用于 DirNode"""
+        dirs = [
+            DirNode("a", "/a", size=500, file_count=10),
+            DirNode("b", "/b", size=2000, file_count=3),
+            DirNode("c", "/c", size=100, file_count=7),
+        ]
+        result = sort_nodes(dirs, "files-desc")
+        counts = [d.file_count for d in result]
+        self.assertEqual(counts, [10, 7, 3])
+
+    def test_files_asc_dirs(self):
+        dirs = [
+            DirNode("a", "/a", size=500, file_count=10),
+            DirNode("b", "/b", size=2000, file_count=3),
+        ]
+        result = sort_nodes(dirs, "files-asc")
+        counts = [d.file_count for d in result]
+        self.assertEqual(counts, [3, 10])
+
+    def test_subdirs_desc(self):
+        dirs = [
+            DirNode("a", "/a", size=500, dir_count=2),
+            DirNode("b", "/b", size=2000, dir_count=5),
+        ]
+        result = sort_nodes(dirs, "subdirs-desc")
+        counts = [d.dir_count for d in result]
+        self.assertEqual(counts, [5, 2])
+
+    def test_subdirs_asc(self):
+        dirs = [
+            DirNode("a", "/a", size=500, dir_count=2),
+            DirNode("b", "/b", size=2000, dir_count=5),
+        ]
+        result = sort_nodes(dirs, "subdirs-asc")
+        counts = [d.dir_count for d in result]
+        self.assertEqual(counts, [2, 5])
+
+
+# ════════════════════════════════════════════════════
+#  测试 format_size 边界值补充
+# ════════════════════════════════════════════════════
+
+class TestFormatSizeEdgeCases(unittest.TestCase):
+    """format_size 边界值补充测试"""
+
+    def test_exact_boundary_kb(self):
+        self.assertEqual(format_size(1024), "1.00 KB")
+        self.assertEqual(format_size(1023), "1023 B")
+
+    def test_exact_boundary_mb(self):
+        self.assertEqual(format_size(1024 ** 2), "1.00 MB")
+        self.assertEqual(format_size(1024 ** 2 - 1), "1024.00 KB")
+
+    def test_exact_boundary_gb(self):
+        self.assertEqual(format_size(1024 ** 3), "1.00 GB")
+
+    def test_exact_boundary_tb(self):
+        self.assertEqual(format_size(1024 ** 4), "1.00 TB")
+
+
+# ════════════════════════════════════════════════════
+#  测试 parse_size_filter 补充
+# ════════════════════════════════════════════════════
+
+class TestParseSizeFilterEdgeCases(unittest.TestCase):
+    """parse_size_filter 边界值补充"""
+
+    def test_zero_bytes(self):
+        self.assertEqual(parse_size_filter("0B"), 0)
+
+    def test_large_value(self):
+        self.assertEqual(parse_size_filter("10TB"), 10 * 1024 ** 4)
+
+    def test_decimal_bytes(self):
+        self.assertEqual(parse_size_filter("1.5KB"), int(1.5 * 1024))
+
+    def test_only_whitespace(self):
+        self.assertEqual(parse_size_filter("   "), 0)
 
 
 # ════════════════════════════════════════════════════

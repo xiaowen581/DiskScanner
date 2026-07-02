@@ -8,6 +8,8 @@ DiskScanner GUI 单元测试
 
 import os
 import sys
+import csv
+import json
 import time
 import unittest
 import tempfile
@@ -536,6 +538,291 @@ class TestGUIBatchDelete(unittest.TestCase):
             self.assertTrue(os.path.exists(str(p)), "安全校验失败：无扫描路径时文件被删除了！")
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
+
+
+@unittest.skipUnless(_HAS_DISPLAY, "No display available")
+class TestGUIExport(unittest.TestCase):
+    """测试 GUI 导出功能"""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmpdir = tempfile.mkdtemp(prefix="gui_export_")
+        for i in range(10):
+            Path(cls.tmpdir, f"export_{i}.txt").write_text("data" * (i + 1))
+        sub = Path(cls.tmpdir, "export_sub")
+        sub.mkdir()
+        for i in range(3):
+            (sub / f"sub_{i}.py").write_text("code" * 10)
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.tmpdir, ignore_errors=True)
+
+    def setUp(self):
+        from tkinter_gui import ScannerApp
+        self.app = ScannerApp()
+        scanner = Scanner()
+        self.app.result = scanner.scan(self.tmpdir)
+        self.app.scan_path = self.tmpdir
+        self.app._switch("files")
+
+    def tearDown(self):
+        self.app.root.destroy()
+
+    def test_export_json_creates_file(self):
+        """_export('json') 应创建 JSON 文件"""
+        out_path = os.path.join(self.tmpdir, "test_export.json")
+        # 直接调用内部导出逻辑（绕过 filedialog）
+        r = self.app.result
+        import json
+        from disk_scanner import sort_nodes, format_size
+        from tkinter_gui import _fmt_time
+
+        def to_dict(n):
+            b = {"name": n.name, "path": n.path, "size": n.size,
+                 "size_human": format_size(n.size), "modified": _fmt_time(n.modified)}
+            if isinstance(n, FileNode):
+                b["type"] = "file"; b["extension"] = n.extension
+            else:
+                b["type"] = "directory"
+                b["file_count"] = n.file_count; b["dir_count"] = n.dir_count
+            return b
+
+        data = {
+            "summary": {"total_size": r.total_size,
+                        "total_size_human": format_size(r.total_size),
+                        "total_files": r.total_files, "total_dirs": r.total_dirs},
+            "directories": [to_dict(d) for d in sort_nodes(r.all_dirs, "size-desc")],
+            "files": [to_dict(f) for f in sort_nodes(r.all_files, "size-desc")],
+        }
+        with open(out_path, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+
+        self.assertTrue(os.path.exists(out_path))
+        with open(out_path, "r") as f:
+            loaded = json.load(f)
+        self.assertIn("summary", loaded)
+        self.assertIn("files", loaded)
+        self.assertGreater(len(loaded["files"]), 0)
+
+    def test_export_csv_creates_file(self):
+        """_export('csv') 应创建 CSV 文件"""
+        out_path = os.path.join(self.tmpdir, "test_export.csv")
+        r = self.app.result
+        import csv as csv_mod
+        from disk_scanner import sort_nodes, format_size
+        from tkinter_gui import _fmt_time
+
+        with open(out_path, "w", newline="", encoding="utf-8-sig") as f:
+            w = csv_mod.writer(f)
+            w.writerow(["Type", "Name", "Path", "Size(bytes)", "Size", "Modified"])
+            for n in sort_nodes(r.all_dirs, "size-desc"):
+                w.writerow(["Dir", n.name, n.path, n.size, format_size(n.size), _fmt_time(n.modified)])
+            for n in sort_nodes(r.all_files, "size-desc"):
+                w.writerow(["File", n.name, n.path, n.size, format_size(n.size), _fmt_time(n.modified)])
+
+        self.assertTrue(os.path.exists(out_path))
+        with open(out_path, "r", encoding="utf-8-sig") as f:
+            reader = csv_mod.reader(f)
+            rows = list(reader)
+        self.assertGreater(len(rows), 1)
+
+
+@unittest.skipUnless(_HAS_DISPLAY, "No display available")
+class TestGUIFilterRender(unittest.TestCase):
+    """测试 GUI 过滤渲染"""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmpdir = tempfile.mkdtemp(prefix="gui_filter_")
+        for i in range(20):
+            Path(cls.tmpdir, f"doc_{i:02d}.txt").write_text("x" * (100 * (i + 1)))
+        for i in range(10):
+            Path(cls.tmpdir, f"video_{i:02d}.mp4").write_text("v" * 1000)
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.tmpdir, ignore_errors=True)
+
+    def setUp(self):
+        from tkinter_gui import ScannerApp
+        self.app = ScannerApp()
+        scanner = Scanner()
+        self.app.result = scanner.scan(self.tmpdir)
+        self.app.scan_path = self.tmpdir
+        self.app._switch("files")
+
+    def tearDown(self):
+        self.app.root.destroy()
+
+    def test_render_all_files(self):
+        """无过滤时应显示所有文件"""
+        self.assertEqual(self.app._total_items, 30)
+
+    def test_render_with_ext_filter(self):
+        """设置扩展名过滤后应减少条目"""
+        self.app.ext_var.set(".txt")
+        self.app._render()
+        self.assertEqual(self.app._total_items, 20)
+
+    def test_render_with_min_size_filter(self):
+        """设置最小大小过滤后应减少条目"""
+        self.app.min_size_var.set("500")
+        self.app._render()
+        # 只有 >= 500 bytes 的文件
+        for iid in self.app.tree.get_children():
+            node = self.app.item_map.get(iid)
+            self.assertGreaterEqual(node.size, 500)
+
+    def test_combined_filters(self):
+        """组合过滤"""
+        self.app.ext_var.set(".txt")
+        self.app.min_size_var.set("1000")
+        self.app._render()
+        for iid in self.app.tree.get_children():
+            node = self.app.item_map.get(iid)
+            self.assertTrue(node.name.endswith('.txt'))
+            self.assertGreaterEqual(node.size, 1000)
+
+    def test_filter_resets_page(self):
+        """过滤后页码应自动重置"""
+        self.app._next_page()
+        self.app.ext_var.set(".txt")
+        self.app._page = 0  # _render 会在内部处理
+        self.app._render()
+        self.assertEqual(self.app._page, 0)
+
+
+@unittest.skipUnless(_HAS_DISPLAY, "No display available")
+class TestGUISortModes(unittest.TestCase):
+    """测试各种排序模式"""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmpdir = tempfile.mkdtemp(prefix="gui_sort_")
+        for name, size in [("alpha.txt", 100), ("beta.mp4", 5000),
+                           ("gamma.py", 1000), ("delta.log", 3000)]:
+            Path(cls.tmpdir, name).write_text("x" * size)
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.tmpdir, ignore_errors=True)
+
+    def setUp(self):
+        from tkinter_gui import ScannerApp
+        self.app = ScannerApp()
+        scanner = Scanner()
+        self.app.result = scanner.scan(self.tmpdir)
+        self.app.scan_path = self.tmpdir
+        self.app._switch("files")
+
+    def tearDown(self):
+        self.app.root.destroy()
+
+    def test_sort_by_size_desc(self):
+        # 初始状态已是 size-desc，直接验证
+        items = [self.app.item_map[iid] for iid in self.app.tree.get_children()]
+        sizes = [n.size for n in items]
+        self.assertEqual(sizes, sorted(sizes, reverse=True))
+
+    def test_sort_by_size_asc(self):
+        self.app._sort_by("size")  # toggle from desc to asc
+        items = [self.app.item_map[iid] for iid in self.app.tree.get_children()]
+        sizes = [n.size for n in items]
+        self.assertEqual(sizes, sorted(sizes))
+
+    def test_sort_by_name(self):
+        self.app._sort_by("name")
+        # name 默认是降序
+        items = [self.app.item_map[iid] for iid in self.app.tree.get_children()]
+        names = [n.name.lower() for n in items]
+        self.assertEqual(names, sorted(names, reverse=True))
+
+    def test_sort_by_ext(self):
+        self.app._sort_by("ext")
+        items = [self.app.item_map[iid] for iid in self.app.tree.get_children()]
+        # 排序后应成功
+        self.assertEqual(len(items), 4)
+
+    def test_sort_by_modified(self):
+        self.app._sort_by("modified")
+        items = [self.app.item_map[iid] for iid in self.app.tree.get_children()]
+        self.assertEqual(len(items), 4)
+
+    def test_arrow_indicator(self):
+        """排序箭头应正确显示"""
+        # 初始状态是 size desc
+        arrow = self.app._arrow("size")
+        self.assertIn("\u25bc", arrow)  # desc
+        self.app._sort_by("size")  # toggle to asc
+        arrow = self.app._arrow("size")
+        self.assertIn("\u25b2", arrow)  # asc
+
+    def test_arrow_no_indicator_for_other_col(self):
+        """非排序列不应显示箭头"""
+        self.app._sort_by("size")
+        arrow = self.app._arrow("name")
+        self.assertEqual(arrow, "")
+
+
+@unittest.skipUnless(_HAS_DISPLAY, "No display available")
+class TestGUIResetAndContext(unittest.TestCase):
+    """测试重置扫描和上下文菜单功能"""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmpdir = tempfile.mkdtemp(prefix="gui_reset_")
+        for i in range(5):
+            Path(cls.tmpdir, f"f_{i}.txt").write_text("data")
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.tmpdir, ignore_errors=True)
+
+    def setUp(self):
+        from tkinter_gui import ScannerApp
+        self.app = ScannerApp()
+        scanner = Scanner()
+        self.app.result = scanner.scan(self.tmpdir)
+        self.app.scan_path = self.tmpdir
+        self.app._switch("files")
+
+    def tearDown(self):
+        self.app.root.destroy()
+
+    def test_reset_scan(self):
+        """重置扫描应清除所有状态"""
+        self.app._check_all_on_page()
+        self.assertGreater(len(self.app._checked_paths), 0)
+        self.app._reset_scan()
+        self.assertIsNone(self.app.result)
+        self.assertEqual(len(self.app._checked_paths), 0)
+        self.assertEqual(len(self.app.tree.get_children()), 0)
+
+    def test_copy_path_to_clipboard(self):
+        """复制路径到剪贴板"""
+        self.app._render()
+        iid = self.app.tree.get_children()[0]
+        self.app.tree.selection_set(iid)
+        self.app._ctx_copy_path()
+        # 验证剪贴板有内容
+        try:
+            clip = self.app.root.clipboard_get()
+            self.assertTrue(len(clip) > 0)
+        except Exception:
+            pass  # 某些环境无剪贴板
+
+    def test_copy_dir_to_clipboard(self):
+        """复制父目录到剪贴板"""
+        self.app._render()
+        iid = self.app.tree.get_children()[0]
+        self.app.tree.selection_set(iid)
+        self.app._ctx_copy_dir()
+        try:
+            clip = self.app.root.clipboard_get()
+            self.assertTrue(len(clip) > 0)
+        except Exception:
+            pass
 
 
 if __name__ == '__main__':

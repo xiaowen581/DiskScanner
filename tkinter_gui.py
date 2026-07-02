@@ -741,19 +741,23 @@ class ScannerApp:
             self.tree.delete(c)
 
         is_dirs = self.view_mode == "dirs"
-        arrow_d = " v" if (self.sort_col == "size" and self.sort_reverse) else \
-                  (" ^" if self.sort_col == "size" else "")
 
         if is_dirs:
             cols = ("check", "path", "size", "files", "subdirs", "pct", "modified")
             self.tree.config(columns=cols)
             self.tree.heading("check", text="")
-            self.tree.heading("path", text="Path", command=lambda: self._sort_by("path"))
-            self.tree.heading("size", text=f"Size{arrow_d}", command=lambda: self._sort_by("size"))
-            self.tree.heading("files", text="Files", command=lambda: self._sort_by("files"))
-            self.tree.heading("subdirs", text="SubDirs", command=lambda: self._sort_by("subdirs"))
-            self.tree.heading("pct", text="%")
-            self.tree.heading("modified", text="Modified", command=lambda: self._sort_by("modified"))
+            self.tree.heading("path", text=f"Path{self._arrow('path')}",
+                              command=lambda: self._sort_by("path"))
+            self.tree.heading("size", text=f"Size{self._arrow('size')}",
+                              command=lambda: self._sort_by("size"))
+            self.tree.heading("files", text=f"Files{self._arrow('files')}",
+                              command=lambda: self._sort_by("files"))
+            self.tree.heading("subdirs", text=f"SubDirs{self._arrow('subdirs')}",
+                              command=lambda: self._sort_by("subdirs"))
+            self.tree.heading("pct", text=f"%{self._arrow('pct')}",
+                              command=lambda: self._sort_by("pct"))
+            self.tree.heading("modified", text=f"Modified{self._arrow('modified')}",
+                              command=lambda: self._sort_by("modified"))
             self.tree.column("check", width=36, anchor='center', minwidth=30, stretch=False)
             self.tree.column("path", width=500, minwidth=200)
             self.tree.column("size", width=110, anchor=E, minwidth=80)
@@ -765,11 +769,16 @@ class ScannerApp:
             cols = ("check", "path", "size", "ext", "pct", "modified")
             self.tree.config(columns=cols)
             self.tree.heading("check", text="")
-            self.tree.heading("path", text="Path", command=lambda: self._sort_by("path"))
-            self.tree.heading("size", text=f"Size{arrow_d}", command=lambda: self._sort_by("size"))
-            self.tree.heading("ext", text="Type", command=lambda: self._sort_by("ext"))
-            self.tree.heading("pct", text="%")
-            self.tree.heading("modified", text="Modified", command=lambda: self._sort_by("modified"))
+            self.tree.heading("path", text=f"Path{self._arrow('path')}",
+                              command=lambda: self._sort_by("path"))
+            self.tree.heading("size", text=f"Size{self._arrow('size')}",
+                              command=lambda: self._sort_by("size"))
+            self.tree.heading("ext", text=f"Type{self._arrow('ext')}",
+                              command=lambda: self._sort_by("ext"))
+            self.tree.heading("pct", text=f"%{self._arrow('pct')}",
+                              command=lambda: self._sort_by("pct"))
+            self.tree.heading("modified", text=f"Modified{self._arrow('modified')}",
+                              command=lambda: self._sort_by("modified"))
             self.tree.column("check", width=36, anchor='center', minwidth=30, stretch=False)
             self.tree.column("path", width=540, minwidth=200)
             self.tree.column("size", width=110, anchor=E, minwidth=80)
@@ -830,13 +839,28 @@ class ScannerApp:
     # ── 排序 ──
 
     def _sort_mode_key(self):
-        if self.sort_col == "size":
-            return "size-desc" if self.sort_reverse else "size-asc"
-        elif self.sort_col in ("name", "path"):
-            return "name"
-        elif self.sort_col == "modified":
-            return "modified"
+        """将当前排序列 + 方向映射为 sort_nodes 的 mode"""
+        col = self.sort_col
+        rev = self.sort_reverse
+        mapping = {
+            "size":    ("size-desc", "size-asc"),
+            "name":    ("name-desc", "name"),
+            "path":    ("path-desc", "path"),
+            "modified": ("modified", "modified-asc"),
+            "ext":     ("ext-desc", "ext"),
+            "files":   ("files-desc", "files-asc"),
+            "subdirs": ("subdirs-desc", "subdirs-asc"),
+            "pct":     ("size-desc", "size-asc"),  # % 与 size 等价
+        }
+        if col in mapping:
+            return mapping[col][0] if rev else mapping[col][1]
         return "size-desc"
+
+    def _arrow(self, col):
+        """生成排序箭头指示符"""
+        if self.sort_col != col:
+            return ""
+        return " \u25bc" if self.sort_reverse else " \u25b2"
 
     def _sort_by(self, col):
         if col == self.sort_col:
