@@ -292,10 +292,20 @@ class Scanner:
 # ─────────────────────────────────────────────
 
 SORT_MODES = {
-    "size-desc": ("大小(降序)", lambda x: x.size, True),
-    "size-asc":  ("大小(升序)", lambda x: x.size, False),
-    "name":      ("名称",       lambda x: x.name.lower(), False),
-    "modified":  ("修改时间",   lambda x: x.modified, True),
+    "size-desc":    ("大小(降序)",  lambda x: x.size, True),
+    "size-asc":     ("大小(升序)",  lambda x: x.size, False),
+    "name":         ("名称",        lambda x: x.name.lower(), False),
+    "name-desc":    ("名称(降序)",  lambda x: x.name.lower(), True),
+    "modified":     ("修改时间",    lambda x: x.modified, True),
+    "modified-asc": ("修改时间(升序)", lambda x: x.modified, False),
+    "path":         ("路径",        lambda x: x.path.lower(), False),
+    "path-desc":    ("路径(降序)",  lambda x: x.path.lower(), True),
+    "ext":          ("类型",        lambda x: getattr(x, 'extension', '') or '', False),
+    "ext-desc":     ("类型(降序)",  lambda x: getattr(x, 'extension', '') or '', True),
+    "files-desc":   ("文件数(降序)", lambda x: getattr(x, 'file_count', 0), True),
+    "files-asc":    ("文件数(升序)", lambda x: getattr(x, 'file_count', 0), False),
+    "subdirs-desc": ("子目录(降序)", lambda x: getattr(x, 'dir_count', 0), True),
+    "subdirs-asc":  ("子目录(升序)", lambda x: getattr(x, 'dir_count', 0), False),
 }
 SORT_MODE_KEYS = list(SORT_MODES.keys())
 
