@@ -30,6 +30,9 @@ from disk_scanner import (
     Scanner, ScanResult, FileNode, DirNode,
     format_size, parse_size_filter, sort_nodes,
 )
+from docker_manager import (
+    DockerManager, DockerImage, DockerContainer, DockerVolume, DockerResult,
+)
 
 # ══════════════════════════════════════════════════════════
 #  设计系统 — 颜色 / 字体 / 尺寸
@@ -338,13 +341,412 @@ class InfoDialog:
 
 
 # ══════════════════════════════════════════════════════════
-#  主应用
+#  Docker Tab Base — shared Treeview + toolbar pattern
+# ══════════════════════════════════════════════════════════
+
+class DockerTabBase(Frame):
+    """Base class for Docker management tabs."""
+
+    def __init__(self, parent, app):
+        super().__init__(parent, bg=C["bg"])
+        self.app = app
+        self._checked = set()   # checked item IDs
+        self.item_map = {}      # iid -> data object
+        self._build()
+
+    def _build(self):
+        outer = Frame(self, bg=C["bg"])
+        outer.pack(fill=BOTH, expand=True, padx=16, pady=12)
+
+        # Toolbar
+        tb = Frame(outer, bg=C["bg"])
+        tb.pack(fill=X, pady=(0, 6))
+        self._build_toolbar(tb)
+
+        # Treeview
+        wrap = Frame(outer, bg=C["border"], bd=1, relief=FLAT)
+        wrap.pack(fill=BOTH, expand=True, pady=(0, 6))
+        inner = Frame(wrap, bg=C["tree_bg"], padx=1, pady=1)
+        inner.pack(fill=BOTH, expand=True)
+
+        ysb = Scrollbar(inner, orient=VERTICAL)
+        xsb = Scrollbar(inner, orient=HORIZONTAL)
+        self.tree = ttk.Treeview(inner, style='Docker.Treeview',
+                                  yscrollcommand=ysb.set, xscrollcommand=xsb.set,
+                                  selectmode='extended', show='headings')
+        ysb.config(command=self.tree.yview)
+        xsb.config(command=self.tree.xview)
+        self.tree.grid(row=0, column=0, sticky='nsew')
+        ysb.grid(row=0, column=1, sticky='ns')
+        xsb.grid(row=1, column=0, sticky='ew')
+        inner.grid_rowconfigure(0, weight=1)
+        inner.grid_columnconfigure(0, weight=1)
+        self.tree.bind('<Button-1>', self._on_click)
+
+        # Status bar
+        sf = Frame(outer, bg=C["bg"])
+        sf.pack(fill=X)
+        self.status_var = StringVar(value="Ready")
+        Label(sf, textvariable=self.status_var, bg=C["bg"], fg=C["text3"],
+              font=F_TINY, anchor=W).pack(side=LEFT)
+
+    def _build_toolbar(self, parent):
+        """Override in subclass."""
+        pass
+
+    def load(self):
+        """Override in subclass to load data."""
+        pass
+
+    def _on_click(self, event):
+        """Handle click on checkbox column."""
+        region = self.tree.identify_region(event.x, event.y)
+        if region not in ('cell', 'heading'):
+            return
+        col = self.tree.identify_column(event.x)
+        if col == '#1':
+            iid = self.tree.identify_row(event.y)
+            if iid:
+                self._toggle_check(iid)
+                return "break"
+
+    def _toggle_check(self, iid):
+        if iid in self._checked:
+            self._checked.discard(iid)
+        else:
+            self._checked.add(iid)
+        checked = iid in self._checked
+        ck = "[x]" if checked else "[ ]"
+        vals = list(self.tree.item(iid, 'values'))
+        vals[0] = ck
+        self.tree.item(iid, values=vals)
+        old_tags = self.tree.item(iid, 'tags')
+        if old_tags:
+            base = old_tags[0].replace('_checked', '')
+            new_tag = f'{base}_checked' if checked else base
+            self.tree.item(iid, tags=(new_tag,))
+        self._update_check_count()
+
+    def _update_check_count(self):
+        """Override in subclass."""
+        pass
+
+    def _check_all(self):
+        for iid in self.tree.get_children():
+            if iid not in self._checked:
+                self._toggle_check(iid)
+        self._update_check_count()
+
+    def _clear_checks(self):
+        self._checked.clear()
+        self._reload_rows()
+
+    def _make_btn(self, parent, text, cmd, **kw):
+        return RoundButton(parent, text=text, command=cmd,
+                            bg=kw.pop('bg', C["btn_bg"]),
+                            fg=kw.pop('fg', C["text"]),
+                            hover_bg=kw.pop('hover_bg', C["btn_hover"]),
+                            padx=kw.pop('padx', 10), **kw)
+
+    def _setup_columns(self, cols, widths, anchors=None, headings=None):
+        self.tree.config(columns=cols)
+        anchors = anchors or {}
+        headings = headings or {}
+        for c in cols:
+            self.tree.heading(c, text=headings.get(c, c))
+            self.tree.column(c, width=widths.get(c, 120),
+                             anchor=anchors.get(c, W),
+                             minwidth=30)
+
+    def _clear_tree(self):
+        for c in self.tree.get_children():
+            self.tree.delete(c)
+        self.item_map.clear()
+        self._checked.clear()
+
+    def _insert_row(self, iid, values, idx):
+        tag = 'odd' if idx % 2 else 'even'
+        self.tree.insert('', END, iid=iid, values=values, tags=(tag,))
+        self.tree.tag_configure('odd', background=C["tree_row1"])
+        self.tree.tag_configure('even', background=C["tree_row2"])
+        self.tree.tag_configure('odd_checked', background="#1a2a40")
+        self.tree.tag_configure('even_checked', background="#162538")
+
+    def _show_result(self, title, results):
+        """Show result dialog for batch operations."""
+        ok = sum(1 for r in results if r.success)
+        fail = len(results) - ok
+        msg = f"Success: {ok}, Failed: {fail}"
+        if fail:
+            err_details = "\n".join(
+                r.message for r in results if not r.success
+            )[:500]
+            InfoDialog(self.app.root, title, msg + "\n\n" + err_details,
+                       msg_color=C["orange"])
+        else:
+            InfoDialog(self.app.root, title, msg,
+                       msg_color=C["green"])
+
+
+# ══════════════════════════════════════════════════════════
+#  Docker Images Tab
+# ══════════════════════════════════════════════════════════
+
+class DockerImagesFrame(DockerTabBase):
+
+    def _build_toolbar(self, parent):
+        self._make_btn(parent, "REFRESH", self.load, padx=8).pack(side=LEFT, padx=(0, 4))
+        self._make_btn(parent, "CHECK ALL", self._check_all, padx=8).pack(side=LEFT, padx=(0, 4))
+        self._make_btn(parent, "CLEAR", self._clear_checks, padx=8).pack(side=LEFT, padx=(0, 4))
+        self._make_btn(parent, "DELETE SELECTED", self._delete_selected,
+                        bg="#da3633", fg="#ffffff", hover_bg="#f85149",
+                        padx=12).pack(side=LEFT, padx=(0, 4))
+        self.count_label = Label(parent, text="", bg=C["bg"], fg=C["text2"], font=F_SMALL)
+        self.count_label.pack(side=RIGHT)
+
+    def load(self):
+        self.status_var.set("Loading images...")
+        self.app.root.update_idletasks()
+        try:
+            self.images = DockerManager.list_images()
+        except Exception as e:
+            self.images = []
+            self.status_var.set(f"Error: {e}")
+            return
+        self._reload_rows()
+        self.status_var.set(f"Loaded {len(self.images)} image(s)")
+
+    def _reload_rows(self):
+        self._clear_tree()
+        cols = ("check", "repository", "tag", "id", "size", "created")
+        widths = {"check": 40, "repository": 320, "tag": 120,
+                  "id": 120, "size": 110, "created": 180}
+        anchors = {"check": 'center', "size": E, "id": 'center'}
+        headings = {"check": "", "repository": "Repository", "tag": "Tag",
+                    "id": "Image ID", "size": "Size", "created": "Created"}
+        self._setup_columns(cols, widths, anchors, headings)
+
+        for i, img in enumerate(self.images):
+            iid = str(i)
+            self.item_map[iid] = img
+            ck = "[x]" if iid in self._checked else "[ ]"
+            vals = (ck, img.repository, img.tag, img.id,
+                    img.size_human, img.created_since)
+            self._insert_row(iid, vals, i)
+        self._update_check_count()
+
+    def _update_check_count(self):
+        n = len(self._checked)
+        total = len(self.images)
+        self.count_label.config(
+            text=f"Images: {total}  |  Selected: {n}" if n else f"Images: {total}")
+
+    def _delete_selected(self):
+        if not self._checked:
+            InfoDialog(self.app.root, "Info", "No images selected.")
+            return
+        items = []
+        ids_to_delete = []
+        for iid in list(self._checked):
+            img = self.item_map.get(iid)
+            if img:
+                items.append(("IMAGE", (img.full_name, img.size_human)))
+                ids_to_delete.append(img.id)
+        dlg = ConfirmDialog(self.app.root, "Delete Images",
+                             f"Delete {len(items)} image(s)?", items,
+                             confirm_text=f"Delete {len(items)}")
+        if not dlg.result:
+            return
+        results = DockerManager.remove_images(ids_to_delete, force=True)
+        self._show_result("Delete Images", results)
+        self.load()
+
+
+# ══════════════════════════════════════════════════════════
+#  Docker Containers Tab
+# ══════════════════════════════════════════════════════════
+
+class DockerContainersFrame(DockerTabBase):
+
+    def _build_toolbar(self, parent):
+        self._make_btn(parent, "REFRESH", self.load, padx=8).pack(side=LEFT, padx=(0, 4))
+        self._make_btn(parent, "CHECK ALL", self._check_all, padx=8).pack(side=LEFT, padx=(0, 4))
+        self._make_btn(parent, "CLEAR", self._clear_checks, padx=8).pack(side=LEFT, padx=(0, 4))
+        self._make_btn(parent, "STOP SELECTED", self._stop_selected,
+                        bg=C["orange"], fg="#ffffff", hover_bg="#e6b800",
+                        padx=12).pack(side=LEFT, padx=(0, 4))
+        self._make_btn(parent, "DELETE SELECTED", self._delete_selected,
+                        bg="#da3633", fg="#ffffff", hover_bg="#f85149",
+                        padx=12).pack(side=LEFT, padx=(0, 4))
+        self.count_label = Label(parent, text="", bg=C["bg"], fg=C["text2"], font=F_SMALL)
+        self.count_label.pack(side=RIGHT)
+
+    def load(self):
+        self.status_var.set("Loading containers...")
+        self.app.root.update_idletasks()
+        try:
+            self.containers = DockerManager.list_containers(all_states=True)
+        except Exception as e:
+            self.containers = []
+            self.status_var.set(f"Error: {e}")
+            return
+        self._reload_rows()
+        self.status_var.set(f"Loaded {len(self.containers)} container(s)")
+
+    def _reload_rows(self):
+        self._clear_tree()
+        cols = ("check", "name", "image", "id", "state", "status", "ports", "created")
+        widths = {"check": 40, "name": 180, "image": 200, "id": 110,
+                  "state": 90, "status": 160, "ports": 200, "created": 160}
+        anchors = {"check": 'center', "state": 'center', "id": 'center'}
+        headings = {"check": "", "name": "Name", "image": "Image", "id": "Container ID",
+                    "state": "State", "status": "Status", "ports": "Ports", "created": "Created"}
+        self._setup_columns(cols, widths, anchors, headings)
+
+        for i, ctr in enumerate(self.containers):
+            iid = str(i)
+            self.item_map[iid] = ctr
+            ck = "[x]" if iid in self._checked else "[ ]"
+            state_display = ctr.state.upper()
+            vals = (ck, ctr.name, ctr.image, ctr.id, state_display,
+                    ctr.status, ctr.ports, ctr.created_since)
+            self._insert_row(iid, vals, i)
+        self._update_check_count()
+
+    def _update_check_count(self):
+        n = len(self._checked)
+        total = len(self.containers)
+        self.count_label.config(
+            text=f"Containers: {total}  |  Selected: {n}" if n else f"Containers: {total}")
+
+    def _stop_selected(self):
+        if not self._checked:
+            InfoDialog(self.app.root, "Info", "No containers selected.")
+            return
+        ids_to_stop = []
+        items = []
+        for iid in list(self._checked):
+            ctr = self.item_map.get(iid)
+            if ctr and ctr.is_running:
+                ids_to_stop.append(ctr.id)
+                items.append(("CONTAINER", (ctr.name, ctr.state)))
+        if not ids_to_stop:
+            InfoDialog(self.app.root, "Info",
+                       "No running containers selected.")
+            return
+        dlg = ConfirmDialog(self.app.root, "Stop Containers",
+                             f"Stop {len(items)} container(s)?", items,
+                             confirm_text=f"Stop {len(items)}",
+                             confirm_bg=C["orange"], confirm_hover="#e6b800")
+        if not dlg.result:
+            return
+        results = DockerManager.stop_containers(ids_to_stop)
+        self._show_result("Stop Containers", results)
+        self.load()
+
+    def _delete_selected(self):
+        if not self._checked:
+            InfoDialog(self.app.root, "Info", "No containers selected.")
+            return
+        ids_to_delete = []
+        items = []
+        for iid in list(self._checked):
+            ctr = self.item_map.get(iid)
+            if ctr:
+                ids_to_delete.append(ctr.id)
+                items.append(("CONTAINER", (ctr.name, ctr.state)))
+        dlg = ConfirmDialog(self.app.root, "Delete Containers",
+                             f"Delete {len(items)} container(s)?", items,
+                             confirm_text=f"Delete {len(items)}")
+        if not dlg.result:
+            return
+        # Force delete (stops running containers first)
+        results = DockerManager.remove_containers(ids_to_delete, force=True)
+        self._show_result("Delete Containers", results)
+        self.load()
+
+
+# ══════════════════════════════════════════════════════════
+#  Docker Volumes Tab
+# ══════════════════════════════════════════════════════════
+
+class DockerVolumesFrame(DockerTabBase):
+
+    def _build_toolbar(self, parent):
+        self._make_btn(parent, "REFRESH", self.load, padx=8).pack(side=LEFT, padx=(0, 4))
+        self._make_btn(parent, "CHECK ALL", self._check_all, padx=8).pack(side=LEFT, padx=(0, 4))
+        self._make_btn(parent, "CLEAR", self._clear_checks, padx=8).pack(side=LEFT, padx=(0, 4))
+        self._make_btn(parent, "DELETE SELECTED", self._delete_selected,
+                        bg="#da3633", fg="#ffffff", hover_bg="#f85149",
+                        padx=12).pack(side=LEFT, padx=(0, 4))
+        self.count_label = Label(parent, text="", bg=C["bg"], fg=C["text2"], font=F_SMALL)
+        self.count_label.pack(side=RIGHT)
+
+    def load(self):
+        self.status_var.set("Loading volumes...")
+        self.app.root.update_idletasks()
+        try:
+            self.volumes = DockerManager.list_volumes()
+        except Exception as e:
+            self.volumes = []
+            self.status_var.set(f"Error: {e}")
+            return
+        self._reload_rows()
+        self.status_var.set(f"Loaded {len(self.volumes)} volume(s)")
+
+    def _reload_rows(self):
+        self._clear_tree()
+        cols = ("check", "name", "driver", "mountpoint", "created")
+        widths = {"check": 40, "name": 300, "driver": 100,
+                  "mountpoint": 400, "created": 200}
+        anchors = {"check": 'center', "driver": 'center'}
+        headings = {"check": "", "name": "Volume Name", "driver": "Driver",
+                    "mountpoint": "Mountpoint", "created": "Created"}
+        self._setup_columns(cols, widths, anchors, headings)
+
+        for i, vol in enumerate(self.volumes):
+            iid = str(i)
+            self.item_map[iid] = vol
+            ck = "[x]" if iid in self._checked else "[ ]"
+            vals = (ck, vol.name, vol.driver, vol.mountpoint, vol.created)
+            self._insert_row(iid, vals, i)
+        self._update_check_count()
+
+    def _update_check_count(self):
+        n = len(self._checked)
+        total = len(self.volumes)
+        self.count_label.config(
+            text=f"Volumes: {total}  |  Selected: {n}" if n else f"Volumes: {total}")
+
+    def _delete_selected(self):
+        if not self._checked:
+            InfoDialog(self.app.root, "Info", "No volumes selected.")
+            return
+        names = []
+        items = []
+        for iid in list(self._checked):
+            vol = self.item_map.get(iid)
+            if vol:
+                names.append(vol.name)
+                items.append(("VOLUME", (vol.name, vol.driver)))
+        dlg = ConfirmDialog(self.app.root, "Delete Volumes",
+                             f"Delete {len(items)} volume(s)?", items,
+                             confirm_text=f"Delete {len(items)}")
+        if not dlg.result:
+            return
+        results = DockerManager.remove_volumes(names, force=True)
+        self._show_result("Delete Volumes", results)
+        self.load()
+
+
+# ══════════════════════════════════════════════════════════
+#  Scanner Main App
 # ══════════════════════════════════════════════════════════
 
 class ScannerApp:
     def __init__(self):
         self.root = Tk()
-        self.root.title("DiskScanner")
+        self.root.title("DiskScanner + Docker Manager")
         self.root.geometry("1320x860")
         self.root.minsize(960, 640)
         self.root.configure(bg=C["bg"])
@@ -356,7 +758,33 @@ class ScannerApp:
             pass
         self._setup_styles()
 
-        # 状态
+        # Build notebook with tabs
+        self.notebook = ttk.Notebook(self.root, style='Dark.TNotebook')
+        self.notebook.pack(fill=BOTH, expand=True, padx=8, pady=8)
+
+        # Tab 1: Disk Scanner
+        self.scanner_frame = Frame(self.notebook, bg=C["bg"])
+        self.notebook.add(self.scanner_frame, text="  Disk Scanner  ")
+
+        # Tab 2: Docker Images
+        self.images_frame = DockerImagesFrame(self.notebook, self)
+        self.notebook.add(self.images_frame, text="  Docker Images  ")
+
+        # Tab 3: Docker Containers
+        self.containers_frame = DockerContainersFrame(self.notebook, self)
+        self.notebook.add(self.containers_frame, text="  Docker Containers  ")
+
+        # Tab 4: Docker Volumes
+        self.volumes_frame = DockerVolumesFrame(self.notebook, self)
+        self.notebook.add(self.volumes_frame, text="  Docker Volumes  ")
+
+        # Lazy-load docker tabs on first view
+        self.notebook.bind('<<NotebookTabChanged>>', self._on_tab_changed)
+        self._docker_tabs_loaded = {
+            "images": False, "containers": False, "volumes": False
+        }
+
+        # Scanner state (moved into scanner_frame)
         self.result = None
         self.scan_path = ""
         self.view_mode = "dirs"
@@ -367,15 +795,28 @@ class ScannerApp:
         self._scan_result = None
         self._scan_error = None
         self._scan_thread = None
-        # 分页
+        # pagination
         self._page = 0
         self._page_size = 200
         self._sorted_items = []
         self._total_items = 0
-        # 勾选状态（跨页持久化，按 path 跟踪）
+        # check state
         self._checked_paths = set()
 
-        self._build_ui()
+        self._build_scanner_ui()
+
+    def _on_tab_changed(self, event):
+        """Lazy-load docker tab content on first view."""
+        idx = self.notebook.index(self.notebook.select())
+        if idx == 1 and not self._docker_tabs_loaded["images"]:
+            self.images_frame.load()
+            self._docker_tabs_loaded["images"] = True
+        elif idx == 2 and not self._docker_tabs_loaded["containers"]:
+            self.containers_frame.load()
+            self._docker_tabs_loaded["containers"] = True
+        elif idx == 3 and not self._docker_tabs_loaded["volumes"]:
+            self.volumes_frame.load()
+            self._docker_tabs_loaded["volumes"] = True
 
     # ── 样式 ──
 
@@ -393,18 +834,37 @@ class ScannerApp:
         s.map('Scan.Treeview',
               background=[('selected', c["tree_sel"])],
               foreground=[('selected', c["accent"])])
+        # Docker treeview style (same but separate name for clarity)
+        s.configure('Docker.Treeview',
+                     background=c["tree_bg"], foreground=c["text"],
+                     fieldbackground=c["tree_bg"], font=F_BODY,
+                     rowheight=28, borderwidth=0)
+        s.configure('Docker.Treeview.Heading',
+                     background=c["tree_head"], foreground=c["text2"],
+                     font=F_BTN, relief='flat', padding=(8, 5))
+        s.map('Docker.Treeview',
+              background=[('selected', c["tree_sel"])],
+              foreground=[('selected', c["accent"])])
         # Progressbar
         s.configure('Scan.Horizontal.TProgressbar',
                      troughcolor=c["surface"], background=c["accent"],
                      borderwidth=0, thickness=4)
         # Separator
         s.configure('Dark.TSeparator', background=c["border"])
+        # Notebook
+        s.configure('Dark.TNotebook', background=c["bg"], borderwidth=0)
+        s.configure('Dark.TNotebook.Tab',
+                     background=c["surface"], foreground=c["text2"],
+                     padding=[16, 8], font=F_BTN)
+        s.map('Dark.TNotebook.Tab',
+              background=[('selected', c["bg"])],
+              foreground=[('selected', c["accent"])])
 
     # ── 构建界面 ──
 
-    def _build_ui(self):
-        # 外层容器，统一边距
-        outer = Frame(self.root, bg=C["bg"])
+    def _build_scanner_ui(self):
+        """Build the scanner UI inside self.scanner_frame."""
+        outer = Frame(self.scanner_frame, bg=C["bg"])
         outer.pack(fill=BOTH, expand=True, padx=16, pady=12)
 
         self._build_header(outer)
@@ -415,6 +875,10 @@ class ScannerApp:
         self._build_detail(outer)
         self._build_statusbar(outer)
         self._build_context_menu()
+
+    def _build_ui(self):
+        # Legacy alias
+        self._build_scanner_ui()
 
     def _build_header(self, parent):
         hdr = Frame(parent, bg=C["bg"])
