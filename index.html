@@ -1,0 +1,717 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>DiskScanner — 磁盘空间分析工具</title>
+<style>
+/* ── Reset & Variables ── */
+*{margin:0;padding:0;box-sizing:border-box}
+:root{
+  --bg:#0d1117;--bg2:#161b22;--bg3:#21262d;--bg4:#30363d;
+  --fg:#e6edf3;--fg2:#8b949e;--fg3:#484f58;
+  --accent:#58a6ff;--green:#3fb950;--red:#f85149;--yellow:#d29922;--cyan:#79c0ff;--purple:#bc8cff;
+  --border:#30363d;--radius:8px;--shadow:0 2px 8px rgba(0,0,0,.3);
+}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:var(--bg);color:var(--fg);line-height:1.5;min-height:100vh}
+a{color:var(--accent);text-decoration:none}
+
+/* ── Header ── */
+.header{background:linear-gradient(135deg,#1a1f35,#0d1117);border-bottom:1px solid var(--border);padding:16px 24px;display:flex;align-items:center;justify-content:space-between}
+.header h1{font-size:20px;font-weight:700;display:flex;align-items:center;gap:10px}
+.header h1 .icon{font-size:24px}
+.header .badge{font-size:11px;background:var(--bg3);color:var(--fg2);padding:2px 8px;border-radius:10px}
+.header-actions{display:flex;gap:8px}
+
+/* ── Layout ── */
+.container{max-width:1400px;margin:0 auto;padding:20px 24px}
+.view{display:none}.view.active{display:block}
+
+/* ── Cards ── */
+.card{background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius);padding:20px;margin-bottom:16px}
+.card-title{font-size:14px;color:var(--fg2);margin-bottom:12px;font-weight:600;text-transform:uppercase;letter-spacing:.5px}
+
+/* ── Start View ── */
+.start-hero{text-align:center;padding:60px 20px 40px}
+.start-hero .logo{font-size:48px;margin-bottom:16px}
+.start-hero h2{font-size:28px;margin-bottom:8px}
+.start-hero p{color:var(--fg2);font-size:15px}
+.start-form{max-width:640px;margin:0 auto}
+.input-group{margin-bottom:16px}
+.input-group label{display:block;font-size:13px;color:var(--fg2);margin-bottom:6px;font-weight:500}
+.input-row{display:flex;gap:8px}
+input[type=text],input[type=number]{width:100%;padding:10px 14px;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius);color:var(--fg);font-size:14px;outline:none;transition:border-color .2s}
+input:focus{border-color:var(--accent)}
+.checkbox-row{display:flex;align-items:center;gap:8px;color:var(--fg2);font-size:13px}
+.checkbox-row input[type=checkbox]{accent-color:var(--accent)}
+
+/* ── Buttons ── */
+.btn{padding:8px 18px;border-radius:var(--radius);border:1px solid var(--border);background:var(--bg3);color:var(--fg);font-size:13px;font-weight:500;cursor:pointer;transition:all .15s;display:inline-flex;align-items:center;gap:6px;white-space:nowrap}
+.btn:hover{background:var(--bg4);border-color:var(--fg3)}
+.btn-primary{background:#238636;border-color:#2ea043;color:#fff}
+.btn-primary:hover{background:#2ea043}
+.btn-danger{background:var(--red);border-color:var(--red);color:#fff}
+.btn-sm{padding:5px 12px;font-size:12px}
+.btn:disabled{opacity:.5;cursor:not-allowed}
+
+/* ── Summary Stats ── */
+.stats-row{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px;margin-bottom:20px}
+.stat-card{background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius);padding:16px;text-align:center}
+.stat-card .stat-value{font-size:24px;font-weight:700;color:var(--green)}
+.stat-card .stat-label{font-size:12px;color:var(--fg2);margin-top:4px}
+.stat-card.accent .stat-value{color:var(--accent)}
+.stat-card.yellow .stat-value{color:var(--yellow)}
+.stat-card.purple .stat-value{color:var(--purple)}
+
+/* ── Toolbar ── */
+.toolbar{display:flex;align-items:center;gap:8px;margin-bottom:16px;flex-wrap:wrap}
+.toolbar .sep{width:1px;height:24px;background:var(--border);margin:0 4px}
+.tab-group{display:flex;border:1px solid var(--border);border-radius:var(--radius);overflow:hidden}
+.tab-btn{padding:7px 16px;font-size:13px;background:var(--bg2);color:var(--fg2);border:none;cursor:pointer;transition:all .15s;font-weight:500}
+.tab-btn:hover{color:var(--fg);background:var(--bg3)}
+.tab-btn.active{background:var(--accent);color:#fff}
+select{padding:7px 12px;background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius);color:var(--fg);font-size:13px;cursor:pointer;outline:none}
+
+/* ── Table ── */
+.table-wrap{overflow-x:auto;border:1px solid var(--border);border-radius:var(--radius)}
+table{width:100%;border-collapse:collapse;font-size:13px}
+thead{background:var(--bg3)}
+th{padding:10px 14px;text-align:left;font-weight:600;color:var(--fg2);font-size:12px;text-transform:uppercase;letter-spacing:.3px;cursor:pointer;user-select:none;white-space:nowrap;position:relative}
+th:hover{color:var(--fg)}
+th.sorted::after{content:'';position:absolute;bottom:3px;left:50%;transform:translateX(-50%);width:16px;height:2px;background:var(--accent);border-radius:1px}
+th .sort-arrow{margin-left:4px;font-size:10px}
+td{padding:9px 14px;border-top:1px solid var(--border);white-space:nowrap}
+tr:hover{background:rgba(88,166,255,.05)}
+tr.selected{background:rgba(88,166,255,.12)}
+td.path-cell{max-width:500px;overflow:hidden;text-overflow:ellipsis;font-family:'SF Mono',Consolas,monospace;font-size:12px}
+td.size-cell{font-weight:600;color:var(--green);text-align:right;font-variant-numeric:tabular-nums}
+td.pct-cell{text-align:right;color:var(--fg2);font-variant-numeric:tabular-nums}
+td.count-cell{text-align:right;color:var(--fg2);font-variant-numeric:tabular-nums}
+td.ext-cell{color:var(--purple);font-size:12px}
+td.time-cell{color:var(--fg3);font-size:12px}
+td.action-cell{text-align:center}
+
+/* ── Size Bar ── */
+.size-bar-cell{width:120px;min-width:80px}
+.size-bar{height:6px;border-radius:3px;background:var(--bg4);overflow:hidden;min-width:40px}
+.size-bar-fill{height:100%;border-radius:3px;background:linear-gradient(90deg,var(--green),var(--cyan));transition:width .4s ease}
+.size-bar-fill.large{background:linear-gradient(90deg,var(--yellow),var(--red))}
+
+/* ── Pagination ── */
+.pagination{display:flex;align-items:center;justify-content:center;gap:6px;margin-top:16px;padding:12px 0}
+.pagination .page-info{color:var(--fg2);font-size:13px;margin:0 12px}
+.page-btn{padding:5px 10px;border:1px solid var(--border);border-radius:4px;background:var(--bg2);color:var(--fg2);cursor:pointer;font-size:12px}
+.page-btn:hover{background:var(--bg3);color:var(--fg)}
+.page-btn.active{background:var(--accent);color:#fff;border-color:var(--accent)}
+.page-btn:disabled{opacity:.3;cursor:not-allowed}
+
+/* ── Detail Panel ── */
+.detail-panel{background:var(--bg2);border:1px solid var(--yellow);border-radius:var(--radius);padding:16px 20px;margin-top:16px;display:none;animation:slideIn .2s ease}
+.detail-panel.show{display:block}
+.detail-panel h3{font-size:14px;color:var(--yellow);margin-bottom:10px;display:flex;align-items:center;gap:8px}
+.detail-row{display:flex;gap:8px;margin-bottom:6px;font-size:13px}
+.detail-row .label{color:var(--fg2);min-width:72px;font-weight:500}
+.detail-row .value{color:var(--fg);word-break:break-all}
+.delete-cmd{background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:10px 14px;margin-top:10px;font-family:'SF Mono',Consolas,monospace;font-size:13px;color:var(--red);position:relative}
+.delete-cmd .copy-btn{position:absolute;right:8px;top:50%;transform:translateY(-50%);padding:3px 8px;font-size:11px}
+.warning-text{color:var(--red);font-size:12px;margin-top:8px}
+
+/* ── Browser Modal ── */
+.modal-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:100;align-items:center;justify-content:center}
+.modal-overlay.show{display:flex}
+.modal{background:var(--bg2);border:1px solid var(--border);border-radius:12px;width:580px;max-height:70vh;display:flex;flex-direction:column;box-shadow:0 8px 32px rgba(0,0,0,.5)}
+.modal-header{padding:16px 20px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between}
+.modal-header h3{font-size:15px}
+.modal-close{background:none;border:none;color:var(--fg2);font-size:20px;cursor:pointer;padding:4px 8px;border-radius:4px}
+.modal-close:hover{background:var(--bg3);color:var(--fg)}
+.modal-body{padding:12px 16px;overflow-y:auto;flex:1}
+.browser-path{display:flex;align-items:center;gap:6px;padding:8px 12px;background:var(--bg);border-radius:6px;margin-bottom:12px;font-size:13px;font-family:'SF Mono',Consolas,monospace;color:var(--cyan);overflow:hidden}
+.browser-item{display:flex;align-items:center;gap:10px;padding:8px 12px;border-radius:6px;cursor:pointer;font-size:13px;transition:background .1s}
+.browser-item:hover{background:var(--bg3)}
+.browser-item.selected{background:rgba(88,166,255,.15);outline:1px solid var(--accent)}
+.browser-item .icon{font-size:16px;width:20px;text-align:center}
+.browser-item .name{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.browser-item .meta{color:var(--fg3);font-size:12px}
+.modal-footer{padding:12px 20px;border-top:1px solid var(--border);display:flex;justify-content:flex-end;gap:8px}
+
+/* ── Loading ── */
+.loading{display:flex;flex-direction:column;align-items:center;padding:60px 20px}
+.spinner{width:40px;height:40px;border:3px solid var(--bg4);border-top-color:var(--accent);border-radius:50%;animation:spin .8s linear infinite}
+.loading-text{margin-top:16px;color:var(--fg2);font-size:14px}
+@keyframes spin{to{transform:rotate(360deg)}}
+@keyframes slideIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
+
+/* ── Empty State ── */
+.empty-state{text-align:center;padding:48px 20px;color:var(--fg2)}
+.empty-state .icon{font-size:48px;margin-bottom:12px;opacity:.5}
+.empty-state p{font-size:14px}
+
+/* ── Toast ── */
+.toast{position:fixed;bottom:24px;right:24px;background:var(--bg3);border:1px solid var(--border);border-radius:var(--radius);padding:12px 20px;font-size:13px;color:var(--fg);z-index:200;transform:translateY(80px);opacity:0;transition:all .3s ease;box-shadow:var(--shadow)}
+.toast.show{transform:translateY(0);opacity:1}
+.toast.error{border-color:var(--red);color:var(--red)}
+.toast.success{border-color:var(--green);color:var(--green)}
+
+/* ── Scrollbar ── */
+::-webkit-scrollbar{width:8px;height:8px}
+::-webkit-scrollbar-track{background:var(--bg)}
+::-webkit-scrollbar-thumb{background:var(--bg4);border-radius:4px}
+::-webkit-scrollbar-thumb:hover{background:var(--fg3)}
+
+/* ── Responsive ── */
+@media(max-width:768px){
+  .stats-row{grid-template-columns:repeat(2,1fr)}
+  .toolbar{flex-wrap:wrap}
+  .container{padding:12px}
+  td.path-cell{max-width:200px}
+}
+</style>
+</head>
+<body>
+
+<!-- ══ HEADER ══ -->
+<div class="header">
+  <h1><span class="icon">💾</span> DiskScanner <span class="badge">v1.0</span></h1>
+  <div class="header-actions">
+    <button class="btn btn-sm" onclick="showView('start')" title="新扫描">🔄 新扫描</button>
+  </div>
+</div>
+
+<div class="container">
+
+<!-- ══ START VIEW ══ -->
+<div id="startView" class="view active">
+  <div class="start-hero">
+    <div class="logo">📊</div>
+    <h2>磁盘空间分析工具</h2>
+    <p>快速扫描目录，按大小排序，定位大文件与文件夹</p>
+  </div>
+  <div class="start-form">
+    <div class="card">
+      <div class="input-group">
+        <label>扫描路径</label>
+        <div class="input-row">
+          <input type="text" id="scanPath" placeholder="/home/dark" value="/home/dark">
+          <button class="btn" onclick="openBrowser()">📁 浏览</button>
+        </div>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+        <div class="input-group">
+          <label>最小文件大小（如 100MB）</label>
+          <input type="text" id="minSize" placeholder="不限">
+        </div>
+        <div class="input-group">
+          <label>文件扩展名过滤（如 .mp4,.mkv）</label>
+          <input type="text" id="extFilter" placeholder="不限">
+        </div>
+      </div>
+      <div class="input-group">
+        <div class="checkbox-row">
+          <input type="checkbox" id="followSymlinks">
+          <label for="followSymlinks">跟踪符号链接</label>
+        </div>
+      </div>
+      <button class="btn btn-primary" style="width:100%;padding:12px;font-size:15px;margin-top:8px" onclick="startScan()">
+        🚀 开始扫描
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- ══ LOADING VIEW ══ -->
+<div id="loadingView" class="view">
+  <div class="loading">
+    <div class="spinner"></div>
+    <div class="loading-text" id="loadingText">正在扫描，请稍候...</div>
+  </div>
+</div>
+
+<!-- ══ RESULTS VIEW ══ -->
+<div id="resultsView" class="view">
+  <!-- Summary -->
+  <div class="stats-row" id="statsRow"></div>
+
+  <!-- Toolbar -->
+  <div class="toolbar">
+    <div class="tab-group">
+      <button class="tab-btn active" data-view="dirs" onclick="switchView('dirs')">📁 目录</button>
+      <button class="tab-btn" data-view="files" onclick="switchView('files')">📄 文件</button>
+    </div>
+    <div class="sep"></div>
+    <select id="sortSelect" onchange="fetchResults()">
+      <option value="size">按大小</option>
+      <option value="name">按名称</option>
+      <option value="modified">按修改时间</option>
+    </select>
+    <select id="orderSelect" onchange="fetchResults()">
+      <option value="desc">降序 ↓</option>
+      <option value="asc">升序 ↑</option>
+    </select>
+    <div class="sep"></div>
+    <select id="topSelect" onchange="fetchResults()">
+      <option value="0">全部</option>
+      <option value="10">Top 10</option>
+      <option value="20">Top 20</option>
+      <option value="50">Top 50</option>
+      <option value="100">Top 100</option>
+    </select>
+    <div style="flex:1"></div>
+    <button class="btn btn-sm" onclick="exportData('csv')" title="导出 CSV">📥 CSV</button>
+    <button class="btn btn-sm" onclick="exportData('json')" title="导出 JSON">📥 JSON</button>
+  </div>
+
+  <!-- Table -->
+  <div class="table-wrap">
+    <table id="resultTable">
+      <thead id="tableHead"></thead>
+      <tbody id="tableBody"></tbody>
+    </table>
+  </div>
+
+  <!-- Pagination -->
+  <div class="pagination" id="pagination"></div>
+
+  <!-- Detail Panel -->
+  <div class="detail-panel" id="detailPanel">
+    <h3>📋 文件详情</h3>
+    <div id="detailContent"></div>
+  </div>
+</div>
+
+</div><!-- /container -->
+
+<!-- ══ BROWSER MODAL ══ -->
+<div class="modal-overlay" id="browserModal">
+  <div class="modal">
+    <div class="modal-header">
+      <h3>📁 选择目录</h3>
+      <button class="modal-close" onclick="closeBrowser()">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="browser-path" id="browserPath">/</div>
+      <div id="browserList"></div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn" onclick="closeBrowser()">取消</button>
+      <button class="btn btn-primary" onclick="confirmBrowser()">确认选择</button>
+    </div>
+  </div>
+</div>
+
+<!-- ══ TOAST ══ -->
+<div class="toast" id="toast"></div>
+
+<script>
+/* ── State ── */
+const state = {
+  view: 'dirs',
+  sort: 'size',
+  order: 'desc',
+  top: 0,
+  page: 1,
+  pageSize: 50,
+  summary: null,
+  items: [],
+  pagination: null,
+  selectedItem: null,
+  browserCurrent: '',
+  browserSelected: '',
+};
+
+/* ── API helpers ── */
+async function api(path, opts) {
+  try {
+    const r = await fetch(path, opts);
+    if (path.includes('/api/export')) return r;
+    return await r.json();
+  } catch (e) {
+    showToast('网络错误: ' + e.message, 'error');
+    return null;
+  }
+}
+
+/* ── Views ── */
+function showView(name) {
+  document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
+  const el = document.getElementById(name + 'View');
+  if (el) el.classList.add('active');
+}
+
+/* ── Scan ── */
+async function startScan() {
+  const path = document.getElementById('scanPath').value.trim();
+  if (!path) return showToast('请输入扫描路径', 'error');
+
+  const body = {
+    path,
+    min_size: document.getElementById('minSize').value.trim(),
+    extensions: document.getElementById('extFilter').value.trim(),
+    follow_symlinks: document.getElementById('followSymlinks').checked,
+  };
+
+  showView('loading');
+  document.getElementById('loadingText').textContent = '正在扫描 ' + path + ' ...';
+
+  const res = await api('/api/scan', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(body),
+  });
+
+  if (!res || res.error) {
+    showToast(res?.error || '启动扫描失败', 'error');
+    showView('start');
+    return;
+  }
+
+  // Poll for result
+  pollResult();
+}
+
+async function pollResult() {
+  const data = await api('/api/result?view=dirs&sort=size&order=desc&top=0&page=1&page_size=50');
+  if (!data) { showView('start'); return; }
+
+  if (data.status === 'scanning') {
+    document.getElementById('loadingText').textContent = '正在扫描，请稍候...';
+    setTimeout(pollResult, 800);
+    return;
+  }
+
+  if (data.status === 'ready') {
+    state.summary = data.summary;
+    state.items = data.items;
+    state.pagination = data.pagination;
+    state.page = 1;
+    renderResults();
+    showView('results');
+    return;
+  }
+
+  showToast('扫描失败', 'error');
+  showView('start');
+}
+
+/* ── Fetch Results ── */
+async function fetchResults() {
+  state.sort = document.getElementById('sortSelect').value;
+  state.order = document.getElementById('orderSelect').value;
+  state.top = parseInt(document.getElementById('topSelect').value);
+  state.page = 1;
+
+  const qs = `view=${state.view}&sort=${state.sort}&order=${state.order}&top=${state.top}&page=1&page_size=${state.pageSize}`;
+  const data = await api(`/api/result?${qs}`);
+  if (!data || data.status !== 'ready') return;
+
+  state.summary = data.summary;
+  state.items = data.items;
+  state.pagination = data.pagination;
+  renderResults();
+}
+
+async function goToPage(p) {
+  state.page = p;
+  const qs = `view=${state.view}&sort=${state.sort}&order=${state.order}&top=${state.top}&page=${p}&page_size=${state.pageSize}`;
+  const data = await api(`/api/result?${qs}`);
+  if (!data || data.status !== 'ready') return;
+  state.items = data.items;
+  state.pagination = data.pagination;
+  renderResults();
+  window.scrollTo({top: 0, behavior: 'smooth'});
+}
+
+function switchView(v) {
+  state.view = v;
+  state.page = 1;
+  state.selectedItem = null;
+  document.querySelectorAll('.tab-btn').forEach(b => b.classList.toggle('active', b.dataset.view === v));
+  fetchResults();
+}
+
+/* ── Render ── */
+function renderResults() {
+  renderStats();
+  renderTableHead();
+  renderTableBody();
+  renderPagination();
+  hideDetail();
+}
+
+function renderStats() {
+  const s = state.summary;
+  if (!s) return;
+  document.getElementById('statsRow').innerHTML = `
+    <div class="stat-card accent">
+      <div class="stat-value">${s.total_size_human}</div>
+      <div class="stat-label">总大小</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-value">${s.total_files.toLocaleString()}</div>
+      <div class="stat-label">文件数</div>
+    </div>
+    <div class="stat-card yellow">
+      <div class="stat-value">${s.total_dirs.toLocaleString()}</div>
+      <div class="stat-label">目录数</div>
+    </div>
+    <div class="stat-card purple">
+      <div class="stat-value">${s.scan_duration}s</div>
+      <div class="stat-label">扫描耗时</div>
+    </div>
+    ${s.skipped_count > 0 ? `<div class="stat-card"><div class="stat-value" style="color:var(--yellow)">${s.skipped_count}</div><div class="stat-label">跳过(无权限)</div></div>` : ''}
+  `;
+}
+
+function renderTableHead() {
+  const isDirs = state.view === 'dirs';
+  const s = state.sort, o = state.order;
+  const arrow = (col) => s === col ? (o === 'desc' ? ' ▼' : ' ▲') : '';
+  const cls = (col) => s === col ? 'sorted' : '';
+
+  let html = `<tr>
+    <th style="width:50px">#</th>
+    <th class="${cls('name')}" onclick="toggleSort('name')">路径${arrow('name')}</th>
+    <th class="${cls('size')}" onclick="toggleSort('size')" style="text-align:right">大小${arrow('size')}</th>
+    <th style="width:120px">占比</th>`;
+  if (isDirs) {
+    html += `<th style="text-align:right">文件数</th><th style="text-align:right">子目录</th>`;
+  } else {
+    html += `<th>类型</th>`;
+  }
+  html += `<th class="${cls('modified')}" onclick="toggleSort('modified')">修改时间${arrow('modified')}</th><th style="width:50px"></th></tr>`;
+  document.getElementById('tableHead').innerHTML = html;
+}
+
+function renderTableBody() {
+  const tbody = document.getElementById('tableBody');
+  if (!state.items.length) {
+    tbody.innerHTML = `<tr><td colspan="8"><div class="empty-state"><div class="icon">📭</div><p>没有匹配的数据</p></div></td></tr>`;
+    return;
+  }
+
+  const isDirs = state.view === 'dirs';
+  const maxSize = state.items.length ? state.items[0].size : 1;
+  let html = '';
+
+  state.items.forEach((item, i) => {
+    const idx = (state.page - 1) * state.pageSize + i + 1;
+    const pct = Math.max(2, (item.size / maxSize) * 100);
+    const barClass = item.pct > 30 ? 'large' : '';
+    const selClass = state.selectedItem === item.path ? 'selected' : '';
+
+    html += `<tr class="${selClass}" onclick="selectItem(${i})" style="cursor:pointer">
+      <td style="color:var(--fg3)">${idx}</td>
+      <td class="path-cell" title="${escHtml(item.path)}">${isDirs ? '📁' : '📄'} ${escHtml(item.path)}</td>
+      <td class="size-cell">${item.size_human}</td>
+      <td class="size-bar-cell">
+        <div style="display:flex;align-items:center;gap:8px">
+          <div class="size-bar" style="flex:1"><div class="size-bar-fill ${barClass}" style="width:${pct}%"></div></div>
+          <span class="pct-cell">${item.pct}%</span>
+        </div>
+      </td>`;
+    if (isDirs) {
+      html += `<td class="count-cell">${item.file_count ?? '-'}</td><td class="count-cell">${item.dir_count ?? '-'}</td>`;
+    } else {
+      html += `<td class="ext-cell">${item.extension || '-'}</td>`;
+    }
+    html += `<td class="time-cell">${item.modified || '-'}</td>`;
+    html += `<td class="action-cell"><button class="btn btn-sm" onclick="event.stopPropagation();showDeleteCmd(${i})" title="显示删除命令">🗑</button></td>`;
+    html += `</tr>`;
+  });
+
+  tbody.innerHTML = html;
+}
+
+function renderPagination() {
+  const p = state.pagination;
+  if (!p || p.total_pages <= 1) {
+    document.getElementById('pagination').innerHTML = '';
+    return;
+  }
+  let html = '';
+  html += `<button class="page-btn" onclick="goToPage(${p.page - 1})" ${p.page <= 1 ? 'disabled' : ''}>‹ 上一页</button>`;
+
+  const start = Math.max(1, p.page - 2);
+  const end = Math.min(p.total_pages, p.page + 2);
+  if (start > 1) html += `<button class="page-btn" onclick="goToPage(1)">1</button><span style="color:var(--fg3)">...</span>`;
+  for (let i = start; i <= end; i++) {
+    html += `<button class="page-btn ${i === p.page ? 'active' : ''}" onclick="goToPage(${i})">${i}</button>`;
+  }
+  if (end < p.total_pages) html += `<span style="color:var(--fg3)">...</span><button class="page-btn" onclick="goToPage(${p.total_pages})">${p.total_pages}</button>`;
+
+  html += `<button class="page-btn" onclick="goToPage(${p.page + 1})" ${p.page >= p.total_pages ? 'disabled' : ''}>下一页 ›</button>`;
+  html += `<span class="page-info">共 ${p.total.toLocaleString()} 条</span>`;
+  document.getElementById('pagination').innerHTML = html;
+}
+
+/* ── Sort ── */
+function toggleSort(col) {
+  if (state.sort === col) {
+    state.order = state.order === 'desc' ? 'asc' : 'desc';
+    document.getElementById('orderSelect').value = state.order;
+  } else {
+    state.sort = col;
+    state.order = 'desc';
+    document.getElementById('sortSelect').value = col;
+    document.getElementById('orderSelect').value = 'desc';
+  }
+  fetchResults();
+}
+
+/* ── Detail / Delete ── */
+function selectItem(i) {
+  const item = state.items[i];
+  state.selectedItem = item.path;
+  renderTableBody();
+  showDetail(item);
+}
+
+function showDeleteCmd(i) {
+  const item = state.items[i];
+  state.selectedItem = item.path;
+  renderTableBody();
+  showDetail(item);
+}
+
+function showDetail(item) {
+  const panel = document.getElementById('detailPanel');
+  const isDir = item.type === 'dir';
+  const delCmd = isDir ? `rm -rf "${item.path}"` : `rm "${item.path}"`;
+
+  let html = `
+    <div class="detail-row"><span class="label">路径</span><span class="value">${escHtml(item.path)}</span></div>
+    <div class="detail-row"><span class="label">大小</span><span class="value" style="color:var(--green);font-weight:600">${item.size_human}</span></div>`;
+  if (isDir) {
+    html += `<div class="detail-row"><span class="label">文件数</span><span class="value">${item.file_count ?? '-'}</span></div>`;
+    html += `<div class="detail-row"><span class="label">子目录</span><span class="value">${item.dir_count ?? '-'}</span></div>`;
+  } else {
+    html += `<div class="detail-row"><span class="label">类型</span><span class="value">${item.extension || '未知'}</span></div>`;
+  }
+  html += `<div class="detail-row"><span class="label">修改时间</span><span class="value">${item.modified || '-'}</span></div>`;
+  html += `<div class="detail-row"><span class="label">占比</span><span class="value">${item.pct}%</span></div>`;
+  html += `<div class="delete-cmd"><span>$ ${escHtml(delCmd)}</span><button class="btn btn-sm copy-btn" onclick="copyCmd(this, '${escAttr(delCmd)}')">复制</button></div>`;
+  html += `<div class="warning-text">⚠ 请谨慎操作，删除后不可恢复！</div>`;
+
+  document.getElementById('detailContent').innerHTML = html;
+  panel.classList.add('show');
+}
+
+function hideDetail() {
+  document.getElementById('detailPanel').classList.remove('show');
+}
+
+function copyCmd(btn, cmd) {
+  navigator.clipboard.writeText(cmd).then(() => {
+    btn.textContent = '已复制 ✓';
+    setTimeout(() => btn.textContent = '复制', 1500);
+  }).catch(() => {
+    // fallback
+    const ta = document.createElement('textarea');
+    ta.value = cmd;
+    document.body.appendChild(ta);
+    ta.select();
+    document.execCommand('copy');
+    document.body.removeChild(ta);
+    btn.textContent = '已复制 ✓';
+    setTimeout(() => btn.textContent = '复制', 1500);
+  });
+}
+
+/* ── Export ── */
+async function exportData(fmt) {
+  showToast('正在导出...', 'success');
+  const r = await api(`/api/export?format=${fmt}`);
+  if (!r) return;
+  const blob = await r.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = fmt === 'json' ? 'disk_scan.json' : 'disk_scan.csv';
+  a.click();
+  URL.revokeObjectURL(url);
+  showToast('导出成功！', 'success');
+}
+
+/* ── Directory Browser ── */
+async function openBrowser() {
+  const modal = document.getElementById('browserModal');
+  modal.classList.add('show');
+  await browseDir(document.getElementById('scanPath').value.trim() || '');
+}
+
+function closeBrowser() {
+  document.getElementById('browserModal').classList.remove('show');
+}
+
+async function browseDir(path) {
+  const qs = path ? `?path=${encodeURIComponent(path)}` : '';
+  const data = await api(`/api/browse${qs}`);
+  if (!data) return;
+  if (data.error) return showToast(data.error, 'error');
+
+  state.browserCurrent = data.current;
+  state.browserSelected = data.current;
+  document.getElementById('browserPath').textContent = data.current;
+
+  const list = document.getElementById('browserList');
+  let html = '';
+
+  if (data.parent) {
+    html += `<div class="browser-item" ondblclick="browseDir('${escAttr(data.parent)}')" onclick="state.browserSelected='${escAttr(data.parent)}';highlightBrowser(this)">
+      <span class="icon">⬆️</span><span class="name">..</span><span class="meta">上级目录</span></div>`;
+  }
+
+  data.items.forEach(item => {
+    if (item.is_dir) {
+      html += `<div class="browser-item" ondblclick="browseDir('${escAttr(item.path)}')" onclick="state.browserSelected='${escAttr(item.path)}';highlightBrowser(this)">
+        <span class="icon">📁</span><span class="name">${escHtml(item.name)}</span><span class="meta">目录</span></div>`;
+    }
+  });
+
+  if (!html) html = '<div class="empty-state"><p>此目录为空</p></div>';
+  list.innerHTML = html;
+}
+
+function highlightBrowser(el) {
+  document.querySelectorAll('.browser-item').forEach(e => e.classList.remove('selected'));
+  el.classList.add('selected');
+}
+
+function confirmBrowser() {
+  document.getElementById('scanPath').value = state.browserSelected || state.browserCurrent;
+  closeBrowser();
+}
+
+/* ── Toast ── */
+function showToast(msg, type) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.className = 'toast show ' + (type || '');
+  clearTimeout(t._timer);
+  t._timer = setTimeout(() => t.className = 'toast', 3000);
+}
+
+/* ── Util ── */
+function escHtml(s) {
+  const d = document.createElement('div');
+  d.textContent = s || '';
+  return d.innerHTML;
+}
+function escAttr(s) {
+  return (s || '').replace(/'/g, "\\'").replace(/"/g, '&quot;');
+}
+
+/* ── Keyboard shortcuts ── */
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') {
+    closeBrowser();
+    hideDetail();
+  }
+});
+
+/* ── Init ── */
+document.getElementById('scanPath').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') startScan();
+});
+</script>
+</body>
+</html>
