@@ -62,8 +62,8 @@ class C:
                 setattr(C, attr, '')
 
 
-# 如果不是 TTY，禁用颜色
-if not sys.stdout.isatty():
+# 如果不是 TTY，禁用颜色（sys.stdout 为 None 时表示无控制台，同样禁用）
+if sys.stdout is None or not sys.stdout.isatty():
     C.disable()
 
 

@@ -6,23 +6,61 @@ DiskScanner — 主入口
 纯 Python 标准库，无需任何第三方依赖
 
 启动方式: python3 tkinter_gui.py
+打包方式: py -m PyInstaller DiskScanner.spec
 """
 
 import os
 import sys
-from tkinter import Tk, ttk
+import traceback
 
-_script_dir = os.path.dirname(os.path.abspath(__file__))
+# ── 错误日志工具（必须在最前面定义，供模块级异常使用） ──
+
+def _log_and_show_error(err_msg: str):
+    """将错误写入日志文件并弹出 MessageBox"""
+    # 写入日志
+    try:
+        log_dir = os.path.dirname(sys.executable) if getattr(sys, 'frozen', False) \
+            else os.path.dirname(os.path.abspath(__file__))
+        log_path = os.path.join(log_dir, 'DiskScanner_error.log')
+        with open(log_path, 'w', encoding='utf-8') as f:
+            f.write(err_msg)
+    except Exception:
+        pass
+    # 弹出 MessageBox
+    try:
+        from tkinter import messagebox, Tk
+        _root = Tk()
+        _root.withdraw()
+        messagebox.showerror('DiskScanner 启动失败', err_msg)
+        _root.destroy()
+    except Exception:
+        pass
+
+
+# ── PyInstaller 冻结模式兼容 ──
+# sys._MEIPASS 指向临时解压目录；开发时用 __file__ 所在目录
+if getattr(sys, 'frozen', False):
+    _script_dir = sys._MEIPASS
+else:
+    _script_dir = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _script_dir)
 
-from ui.theme import C, setup_styles
-from ui.scanner_frame import ScannerFrame
-from ui.docker_frame import DockerFrame
+
+# ── 导入业务模块（包裹在 try/except 中，以便捕获导入期错误） ──
+try:
+    from tkinter import Tk, ttk
+    from ui.theme import C, setup_styles
+    from ui.scanner_frame import ScannerFrame
+    from ui.docker_frame import DockerFrame
+    import ui.theme as _theme
+    import ui._base as _base
+    import types as _types
+except Exception:
+    _log_and_show_error(traceback.format_exc())
+    sys.exit(1)
 
 
-import ui.theme as _theme
-import ui._base as _base
-
+# ── 主应用程序 ──
 
 class DiskScannerApp:
     """主应用程序 — 包含 File 和 Docker 两大功能标签页"""
@@ -109,43 +147,50 @@ class ScannerApp:
             object.__setattr__(self, name, value)
 
 
-def __getattr__(name):
-    """模块级属性代理 — 将 _DIALOG_AUTO_DISMISS 等转发到 ui._base"""
-    if name == '_DIALOG_AUTO_DISMISS':
-        return _base._DIALOG_AUTO_DISMISS
-    raise AttributeError(f"module 'tkinter_gui' has no attribute {name!r}")
+# ── 模块级属性代理（仅在非冻结模式下启用，避免与 PyInstaller 冲突） ──
 
-
-def __setattr_module__(name, value):
-    pass  # handled by __setattr__ below
-
-
-# 允许通过 tkinter_gui._DIALOG_AUTO_DISMISS = True 设置
-import types as _types
-_orig_module = sys.modules[__name__]
-
-
-class _ModuleProxy(_types.ModuleType):
-    def __setattr__(self, name, value):
-        if name == '_DIALOG_AUTO_DISMISS':
-            _base._DIALOG_AUTO_DISMISS = value
-        else:
-            super().__setattr__(name, value)
-
-    def __getattr__(self, name):
+if not getattr(sys, 'frozen', False):
+    def __getattr__(name):
+        """模块级属性代理 — 将 _DIALOG_AUTO_DISMISS 等转发到 ui._base"""
         if name == '_DIALOG_AUTO_DISMISS':
             return _base._DIALOG_AUTO_DISMISS
         raise AttributeError(f"module 'tkinter_gui' has no attribute {name!r}")
 
 
-_proxy = _ModuleProxy(__name__)
-_proxy.__dict__.update(_orig_module.__dict__)
-sys.modules[__name__] = _proxy
+    def __setattr_module__(name, value):
+        pass  # handled by __setattr__ below
 
+
+    _orig_module = sys.modules[__name__]
+
+
+    class _ModuleProxy(_types.ModuleType):
+        def __setattr__(self, name, value):
+            if name == '_DIALOG_AUTO_DISMISS':
+                _base._DIALOG_AUTO_DISMISS = value
+            else:
+                super().__setattr__(name, value)
+
+        def __getattr__(self, name):
+            if name == '_DIALOG_AUTO_DISMISS':
+                return _base._DIALOG_AUTO_DISMISS
+            raise AttributeError(f"module 'tkinter_gui' has no attribute {name!r}")
+
+
+    _proxy = _ModuleProxy(__name__)
+    _proxy.__dict__.update(_orig_module.__dict__)
+    sys.modules[__name__] = _proxy
+
+
+# ── 入口 ──
 
 def main():
-    app = DiskScannerApp()
-    app.run()
+    try:
+        app = DiskScannerApp()
+        app.run()
+    except Exception:
+        _log_and_show_error(traceback.format_exc())
+        sys.exit(1)
 
 
 if __name__ == '__main__':
