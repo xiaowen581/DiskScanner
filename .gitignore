@@ -8,6 +8,11 @@ dist/
 build/
 *.egg
 
+# PyInstaller
+*.manifest
+*.spec.bak
+warn*.txt
+
 # Virtual environments
 venv/
 .venv/

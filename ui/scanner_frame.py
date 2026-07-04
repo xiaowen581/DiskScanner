@@ -18,7 +18,11 @@ from tkinter import (
     RIGHT, TOP, BOTTOM, X, Y, END, W, E, FLAT,
 )
 
-_script_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# PyInstaller 冻结模式兼容
+if getattr(sys, 'frozen', False):
+    _script_dir = sys._MEIPASS
+else:
+    _script_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, _script_dir)
 
 from disk_scanner import (
