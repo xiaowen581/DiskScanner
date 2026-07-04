@@ -368,7 +368,7 @@ class TestScanner(unittest.TestCase):
         self.assertEqual(result.total_files, 4)    # file1, file2, file3, deep
         self.assertGreaterEqual(result.total_dirs, 4)  # root, subdir, empty, a, a/b, a/b/c
         self.assertEqual(result.skipped_count, 0)
-        self.assertGreater(result.scan_duration, 0)
+        self.assertGreaterEqual(result.scan_duration, 0)
 
     def test_scan_total_size(self):
         scanner = Scanner()

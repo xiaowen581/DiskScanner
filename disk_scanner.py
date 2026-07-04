@@ -800,12 +800,15 @@ def main():
     def progress_spinner():
         nonlocal spinner_idx
         while not stop_event.is_set():
-            count, current = scanner.progress_info
-            line = f"\r{C.CYAN}{spinner_chars[spinner_idx % len(spinner_chars)]}{C.RESET} 已扫描 {count:,} 个文件... {C.DIM}{truncate(current, 50)}{C.RESET}"
-            sys.stdout.write(line)
-            sys.stdout.flush()
-            spinner_idx += 1
-            time.sleep(0.1)
+            try:
+                count, current = scanner.progress_info
+                line = f"\r{C.CYAN}{spinner_chars[spinner_idx % len(spinner_chars)]}{C.RESET} 已扫描 {count:,} 个文件... {C.DIM}{truncate(current, 50)}{C.RESET}"
+                sys.stdout.write(line)
+                sys.stdout.flush()
+                spinner_idx += 1
+                time.sleep(0.1)
+            except Exception:
+                break
 
     spinner_thread = threading.Thread(target=progress_spinner, daemon=True)
     spinner_thread.start()
