@@ -63,7 +63,8 @@ class C:
 
 
 # 如果不是 TTY，禁用颜色
-if not sys.stdout.isatty():
+# （PyInstaller --windowed 模式下 sys.stdout 为 None）
+if sys.stdout is None or not sys.stdout.isatty():
     C.disable()
 
 
