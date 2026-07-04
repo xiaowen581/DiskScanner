@@ -20,11 +20,7 @@ from PyQt5.QtWidgets import (
 from PyQt5.QtCore import Qt, QThread, pyqtSignal, QTimer
 from PyQt5.QtGui import QColor, QFont, QFontMetrics
 
-# PyInstaller 冻结模式兼容
-if getattr(sys, 'frozen', False):
-    _script_dir = sys._MEIPASS
-else:
-    _script_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_script_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, _script_dir)
 
 from disk_scanner import (

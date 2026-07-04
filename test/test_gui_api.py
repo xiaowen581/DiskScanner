@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-DiskScanner Web GUI (web_gui.py) 单元测试
+DiskScanner Web GUI (gui.py) 单元测试
 覆盖: HTTP API 路由、扫描、导出、浏览、状态查询
 运行: python3 -m unittest test_gui_api.py -v
 """
