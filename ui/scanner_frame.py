@@ -255,6 +255,14 @@ class ScannerFrame(QWidget):
         self.tree_title.setStyleSheet(f"color: {C['text2']};")
         tb.addWidget(self.tree_title)
 
+        # 全选/全取消按钮
+        self._select_all_btn = RoundButton(None, "SELECT ALL", self._check_all_on_page,
+                                            bg=C["btn_bg"], fg=C["text"], padx=8)
+        tb.addWidget(self._select_all_btn)
+        self._deselect_all_btn = RoundButton(None, "CLEAR", self._uncheck_all_on_page,
+                                              bg=C["btn_bg"], fg=C["text"], padx=8)
+        tb.addWidget(self._deselect_all_btn)
+
         layout.addLayout(tb)
 
     def _build_tree(self, layout):
@@ -279,6 +287,7 @@ class ScannerFrame(QWidget):
 
         wrap_layout.addWidget(self.tree)
         layout.addWidget(wrap, stretch=1)
+        self._check_header = None  # 全选/全取消 表头控件
 
     def _build_detail(self, layout):
         det = QFrame()
@@ -423,7 +432,7 @@ class ScannerFrame(QWidget):
         is_dirs = self.view_mode == "dirs"
         if is_dirs:
             cols = ["check", "path", "size", "files", "subdirs", "pct", "modified"]
-            widths = [36, 500, 110, 80, 80, 70, 150]
+            widths = [50, 0, 110, 80, 80, 70, 150]  # 0 = Stretch
             header_labels = [
                 "",
                 f"Path",
@@ -435,7 +444,7 @@ class ScannerFrame(QWidget):
             ]
         else:
             cols = ["check", "path", "size", "ext", "pct", "modified"]
-            widths = [36, 540, 110, 80, 70, 150]
+            widths = [50, 0, 110, 80, 70, 150]  # 0 = Stretch
             header_labels = [
                 "",
                 f"Path",
@@ -447,8 +456,16 @@ class ScannerFrame(QWidget):
 
         self.tree.setColumnCount(len(cols))
         self.tree.setHorizontalHeaderLabels(header_labels)
+        header = self.tree.horizontalHeader()
+        # check 列 (0): Fixed 不可拖拽
+        header.setSectionResizeMode(0, QHeaderView.Fixed)
+        # path 列 (1): Stretch 自动填满剩余空间
+        header.setSectionResizeMode(1, QHeaderView.Stretch)
+        # 其余列: Fixed 固定宽度
         for i, w in enumerate(widths):
-            self.tree.setColumnWidth(i, w)
+            if i >= 2 and w > 0:
+                header.setSectionResizeMode(i, QHeaderView.Fixed)
+                self.tree.setColumnWidth(i, w)
         self.tree.setRowCount(len(items))
         self._cols = cols
 
@@ -458,13 +475,12 @@ class ScannerFrame(QWidget):
             self.item_map[iid] = node
             pct = f"{node.size / total * 100:.1f}%"
             checked = node.path in self._checked_paths
-            ck = "[x]" if checked else "[ ]"
 
             if is_dirs:
-                vals = [ck, node.path, format_size(node.size), str(node.file_count),
+                vals = ["", node.path, format_size(node.size), str(node.file_count),
                         str(node.dir_count), pct, fmt_time(node.modified)]
             else:
-                vals = [ck, node.path, format_size(node.size), node.extension or "-",
+                vals = ["", node.path, format_size(node.size), node.extension or "-",
                         pct, fmt_time(node.modified)]
 
             # Determine row background
@@ -478,12 +494,26 @@ class ScannerFrame(QWidget):
                 item = QTableWidgetItem(val)
                 item.setBackground(bg)
                 if j == 0:
-                    item.setTextAlignment(Qt.AlignCenter)
+                    # 隐藏文本项，QCheckBox 控件覆盖其上
                     item.setFlags(item.flags() & ~Qt.ItemIsSelectable)
+                    item.setText("[x]" if checked else "[ ]")
+                    self.tree.setItem(i, j, item)
+                    cb = QCheckBox()
+                    cb.setChecked(checked)
+                    # 移除 checkbox 默认背景，使其透明融入行背景
+                    cb.setStyleSheet(f"background: transparent; color: {C['text']};")
+                    cb.stateChanged.connect(
+                        lambda state, row_idx=i: self._on_checkbox_changed(row_idx, state)
+                    )
+                    self.tree.setCellWidget(i, j, cb)
                 elif j in (2, 3, 4, 5) and not is_dirs or j in (2, 3, 4, 5, 6) and is_dirs:
                     if j >= 2:
                         item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
-                self.tree.setItem(i, j, item)
+                    self.tree.setItem(i, j, item)
+                else:
+                    self.tree.setItem(i, j, item)
+
+        self._update_header_check()
 
         vlabel = "Directories" if self.view_mode == "dirs" else "Files"
         checked_count = len(self._checked_paths)
@@ -560,6 +590,47 @@ class ScannerFrame(QWidget):
         self._render()
 
     # ── 事件处理 ──
+
+    def _on_checkbox_changed(self, row, state):
+        """QCheckBox 状态变化回调"""
+        iid = str(row)
+        node = self.item_map.get(iid)
+        if not node:
+            return
+        checked = (state == Qt.Checked)
+        if checked:
+            self._checked_paths.add(node.path)
+        else:
+            self._checked_paths.discard(node.path)
+        # 同步底层 item 文本（兼容测试）
+        item = self.tree.item(row, 0)
+        if item:
+            item.setText("[x]" if checked else "[ ]")
+        # 更新行背景
+        self._update_row_bg(row, checked)
+        self._update_check_count()
+        self._update_header_check()
+
+    def _on_header_check_clicked(self):
+        """点击表头 全选/全取消 按钮"""
+        row_count = self.tree.rowCount()
+        if row_count == 0:
+            return
+        # 判断当前页是否全部已勾选
+        all_checked = True
+        for i in range(row_count):
+            cb = self.tree.cellWidget(i, 0)
+            if cb and not cb.isChecked():
+                all_checked = False
+                break
+        if all_checked:
+            self._uncheck_all_on_page()
+        else:
+            self._check_all_on_page()
+
+    def _update_header_check(self):
+        """更新全选/全取消按钮状态提示"""
+        pass
 
     def _on_select(self):
         row = self.tree.currentRow()
@@ -657,14 +728,24 @@ class ScannerFrame(QWidget):
     def _update_row_check(self, iid, path):
         row = int(iid)
         checked = path in self._checked_paths
-        ck = "[x]" if checked else "[ ]"
 
-        # Update checkbox text
+        # 更新 QCheckBox 控件（阻止信号避免递归）
+        cb = self.tree.cellWidget(row, 0)
+        if cb:
+            cb.blockSignals(True)
+            cb.setChecked(checked)
+            cb.blockSignals(False)
+
+        # 同步底层 item 文本
         item = self.tree.item(row, 0)
         if item:
-            item.setText(ck)
+            item.setText("[x]" if checked else "[ ]")
 
-        # Update row background
+        # 更新行背景
+        self._update_row_bg(row, checked)
+
+    def _update_row_bg(self, row, checked):
+        """根据勾选状态更新整行背景色"""
         base = 'odd' if row % 2 else 'even'
         if checked:
             bg = QColor(C["checked_odd"] if base == 'odd' else C["checked_even"])
@@ -692,6 +773,7 @@ class ScannerFrame(QWidget):
                 self._checked_paths.add(node.path)
                 self._update_row_check(iid, node.path)
         self._update_check_count()
+        self._update_header_check()
 
     def _uncheck_all_on_page(self):
         for i in range(self.tree.rowCount()):
@@ -701,6 +783,7 @@ class ScannerFrame(QWidget):
                 self._checked_paths.discard(node.path)
                 self._update_row_check(iid, node.path)
         self._update_check_count()
+        self._update_header_check()
 
     def _clear_all_checks(self):
         self._checked_paths.clear()
