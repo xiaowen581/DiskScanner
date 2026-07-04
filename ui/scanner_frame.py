@@ -433,8 +433,8 @@ class ScannerFrame(Frame):
 
         self.tree.tag_configure('odd', background=C["tree_row1"])
         self.tree.tag_configure('even', background=C["tree_row2"])
-        self.tree.tag_configure('odd_checked', background="#1a2a40")
-        self.tree.tag_configure('even_checked', background="#162538")
+        self.tree.tag_configure('odd_checked', background=C["checked_odd"])
+        self.tree.tag_configure('even_checked', background=C["checked_even"])
 
         vlabel = "Directories" if self.view_mode == "dirs" else "Files"
         checked_count = len(self._checked_paths)
