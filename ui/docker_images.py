@@ -1,49 +1,58 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-docker_images.py — Docker Images 子标签页
+docker_images.py — Docker Images 子标签页 (PyQt5 版本)
 """
 
-from tkinter import Label, E, W
+from PyQt5.QtWidgets import QLabel, QHBoxLayout, QApplication
+from PyQt5.QtCore import Qt
 from ui.docker_base import DockerTabBase
-from ui.theme import C, F_SMALL, ConfirmDialog, InfoDialog
+from ui.theme import C, F_SMALL, make_font, ConfirmDialog, InfoDialog
 from docker_manager import DockerManager
 
 
 class DockerImagesFrame(DockerTabBase):
 
-    def _build_toolbar(self, parent):
-        self._make_btn(parent, "REFRESH", self.load, padx=8).pack(side="left", padx=(0, 4))
-        self._make_btn(parent, "CHECK ALL", self._check_all, padx=8).pack(side="left", padx=(0, 4))
-        self._make_btn(parent, "CLEAR", self._clear_checks, padx=8).pack(side="left", padx=(0, 4))
-        self._make_btn(parent, "DELETE SELECTED", self._delete_selected,
-                        bg="#da3633", fg="#ffffff", hover_bg="#f85149",
-                        padx=12).pack(side="left", padx=(0, 4))
-        self.count_label = Label(parent, text="", bg=C["bg"], fg=C["text2"], font=F_SMALL)
-        self.count_label.pack(side="right")
+    def _build_toolbar(self, layout):
+        btn1 = self._make_btn(None, "REFRESH", self.load, padx=8)
+        layout.addWidget(btn1)
+        btn2 = self._make_btn(None, "CHECK ALL", self._check_all, padx=8)
+        layout.addWidget(btn2)
+        btn3 = self._make_btn(None, "CLEAR", self._clear_checks, padx=8)
+        layout.addWidget(btn3)
+        btn4 = self._make_btn(None, "DELETE SELECTED", self._delete_selected,
+                               bg="#da3633", fg="#ffffff", hover_bg="#f85149",
+                               padx=12)
+        layout.addWidget(btn4)
+        layout.addStretch()
+        self.count_label = QLabel("")
+        self.count_label.setFont(make_font(F_SMALL))
+        self.count_label.setStyleSheet(f"color: {C['text2']};")
+        layout.addWidget(self.count_label)
 
     def load(self):
-        self.status_var.set("Loading images...")
-        self.root.update_idletasks()
+        self.status_label.setText("Loading images...")
+        QApplication.processEvents()
         try:
             self.images = DockerManager.list_images()
         except Exception as e:
             self.images = []
-            self.status_var.set(f"Error: {e}")
+            self.status_label.setText(f"Error: {e}")
             return
         self._reload_rows()
-        self.status_var.set(f"Loaded {len(self.images)} image(s)")
+        self.status_label.setText(f"Loaded {len(self.images)} image(s)")
 
     def _reload_rows(self):
         self._clear_tree()
-        cols = ("check", "repository", "tag", "id", "size", "created")
+        cols = ["check", "repository", "tag", "id", "size", "created"]
         widths = {"check": 40, "repository": 320, "tag": 120,
                   "id": 120, "size": 110, "created": 180}
-        anchors = {"check": 'center', "size": E, "id": 'center'}
+        alignments = {"check": Qt.AlignCenter}
         headings = {"check": "", "repository": "Repository", "tag": "Tag",
                     "id": "Image ID", "size": "Size", "created": "Created"}
-        self._setup_columns(cols, widths, anchors, headings)
+        self._setup_columns(cols, widths, alignments, headings)
 
+        self.tree.setRowCount(len(self.images))
         for i, img in enumerate(self.images):
             iid = str(i)
             self.item_map[iid] = img
@@ -56,8 +65,8 @@ class DockerImagesFrame(DockerTabBase):
     def _update_check_count(self):
         n = len(self._checked)
         total = len(self.images)
-        self.count_label.config(
-            text=f"Images: {total}  |  Selected: {n}" if n else f"Images: {total}")
+        self.count_label.setText(
+            f"Images: {total}  |  Selected: {n}" if n else f"Images: {total}")
 
     def _delete_selected(self):
         if not self._checked:

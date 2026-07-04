@@ -1,22 +1,24 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-scanner_frame.py — File Scanner 标签页
+scanner_frame.py — File Scanner 标签页 (PyQt5 版本)
 包含扫描、排序、过滤、删除、导出等全部功能
 """
 
 import os
 import sys
 import shutil
-import threading
 import json
 import csv
-from tkinter import (
-    ttk, Frame, Label, Entry, Button, StringVar,
-    BooleanVar, Checkbutton, Menu, Canvas, Scrollbar,
-    filedialog, messagebox, HORIZONTAL, VERTICAL, BOTH, LEFT,
-    RIGHT, TOP, BOTTOM, X, Y, END, W, E, FLAT,
+
+from PyQt5.QtWidgets import (
+    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit,
+    QCheckBox, QTableWidget, QTableWidgetItem, QHeaderView,
+    QProgressBar, QFrame, QMenu, QAction, QFileDialog, QMessageBox,
+    QSizePolicy, QAbstractItemView, QApplication, QToolButton,
 )
+from PyQt5.QtCore import Qt, QThread, pyqtSignal, QTimer
+from PyQt5.QtGui import QColor, QFont, QFontMetrics
 
 # PyInstaller 冻结模式兼容
 if getattr(sys, 'frozen', False):
@@ -31,17 +33,36 @@ from disk_scanner import (
 )
 from ui.theme import (
     C, F_TITLE, F_BODY, F_SMALL, F_TINY, F_BIG, F_MONO, F_BTN,
-    RoundButton, StatCard, ConfirmDialog, InfoDialog, fmt_time,
+    RoundButton, StatCard, ConfirmDialog, InfoDialog, fmt_time, make_font,
 )
 
 
-class ScannerFrame(Frame):
+class ScanWorker(QThread):
+    """后台扫描线程"""
+    finished = pyqtSignal(object)
+    error = pyqtSignal(str)
+
+    def __init__(self, path, follow_symlinks=False):
+        super().__init__()
+        self.path = path
+        self.follow_symlinks = follow_symlinks
+
+    def run(self):
+        try:
+            scanner = Scanner(follow_symlinks=self.follow_symlinks)
+            result = scanner.scan(self.path)
+            self.finished.emit(result)
+        except Exception as e:
+            self.error.emit(str(e))
+
+
+class ScannerFrame(QWidget):
     """磁盘扫描器标签页"""
 
     def __init__(self, parent, app):
-        super().__init__(parent, bg=C["bg"])
+        super().__init__(parent)
         self.app = app
-        self.root = app  # app 是主 Tk 窗口
+        self.root = app  # app 是主窗口
 
         # 状态
         self.result = None
@@ -53,18 +74,20 @@ class ScannerFrame(Frame):
         self._scanning = False
         self._scan_result = None
         self._scan_error = None
-        self._scan_thread = None
+        self._scan_worker = None
         self._page = 0
         self._page_size = 200
         self._sorted_items = []
         self._total_items = 0
         self._checked_paths = set()
+        self._current_row = None
 
         self._build_ui()
 
     def _build_ui(self):
-        outer = Frame(self, bg=C["bg"])
-        outer.pack(fill=BOTH, expand=True, padx=16, pady=12)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(16, 12, 16, 12)
+        outer.setSpacing(8)
 
         self._build_header(outer)
         self._build_controls(outer)
@@ -73,189 +96,244 @@ class ScannerFrame(Frame):
         self._build_tree(outer)
         self._build_detail(outer)
         self._build_statusbar(outer)
-        self._build_context_menu()
 
-    def _build_header(self, parent):
-        hdr = Frame(parent, bg=C["bg"])
-        hdr.pack(fill=X, pady=(0, 10))
+    def _build_header(self, layout):
+        # Header 区域已移除标题文字
+        pass
 
-        left = Frame(hdr, bg=C["bg"])
-        left.pack(side=LEFT)
-        Label(left, text="DiskScanner", bg=C["bg"], fg=C["accent"],
-              font=F_TITLE).pack(side=LEFT)
-        Label(left, text=" v1.0 ", bg=C["surface"], fg=C["text2"],
-              font=F_TINY, padx=6, pady=2).pack(side=LEFT, padx=(10, 0))
+    def _build_controls(self, layout):
+        card = QFrame()
+        card.setStyleSheet(f"background-color: {C['surface']}; border-radius: 8px;")
+        card_layout = QVBoxLayout(card)
+        card_layout.setContentsMargins(16, 12, 16, 12)
+        card_layout.setSpacing(8)
 
-        self._new_scan_btn = RoundButton(hdr, text="New Scan",
-                                          command=self._reset_scan,
-                                          bg=C["btn_bg"], fg=C["text"])
-        self._new_scan_btn.pack(side=RIGHT)
+        # Row 1: Path
+        r1 = QHBoxLayout()
+        path_lbl = QLabel("PATH")
+        path_lbl.setFont(make_font(F_TINY))
+        path_lbl.setStyleSheet(f"color: {C['text2']};")
+        r1.addWidget(path_lbl)
 
-    def _build_controls(self, parent):
-        card = Frame(parent, bg=C["surface"], padx=16, pady=12)
-        card.pack(fill=X, pady=(0, 10))
+        self.path_entry = QLineEdit(os.path.expanduser("~"))
+        self.path_entry.setFont(make_font(F_MONO))
+        self.path_entry.returnPressed.connect(self._start_scan)
+        r1.addWidget(self.path_entry, stretch=1)
 
-        r1 = Frame(card, bg=C["surface"])
-        r1.pack(fill=X, pady=(0, 8))
-
-        Label(r1, text="PATH", bg=C["surface"], fg=C["text2"],
-              font=F_TINY).pack(side=LEFT, padx=(0, 8))
-
-        self.path_var = StringVar(value=os.path.expanduser("~"))
-        self.path_entry = Entry(r1, textvariable=self.path_var, font=F_MONO,
-                                 bg=C["input_bg"], fg=C["text"],
-                                 insertbackground=C["accent"], relief=FLAT, bd=6,
-                                 highlightthickness=1, highlightcolor=C["accent"],
-                                 highlightbackground=C["border"])
-        self.path_entry.pack(side=LEFT, fill=X, expand=True, padx=(0, 8))
-        self.path_entry.bind('<Return>', lambda e: self._start_scan())
-
-        self._browse_btn = RoundButton(r1, text="Browse", command=self._browse,
+        self._browse_btn = RoundButton(card, "Browse", self._browse,
                                         bg=C["btn_bg"], fg=C["text"])
-        self._browse_btn.pack(side=LEFT, padx=(0, 8))
+        r1.addWidget(self._browse_btn)
 
-        self._scan_btn = RoundButton(r1, text="START SCAN", command=self._start_scan,
+        self._scan_btn = RoundButton(card, "START SCAN", self._start_scan,
                                       bg=C["accent"], fg="#ffffff",
                                       hover_bg="#79c0ff")
-        self._scan_btn.pack(side=LEFT)
+        r1.addWidget(self._scan_btn)
+        card_layout.addLayout(r1)
 
-        r2 = Frame(card, bg=C["surface"])
-        r2.pack(fill=X)
+        # Row 2: Filters
+        r2 = QHBoxLayout()
+        min_lbl = QLabel("MIN SIZE")
+        min_lbl.setFont(make_font(F_TINY))
+        min_lbl.setStyleSheet(f"color: {C['text3']};")
+        r2.addWidget(min_lbl)
+        self.min_size_var = QLineEdit()
+        self.min_size_var.setFont(make_font(F_SMALL))
+        self.min_size_var.setFixedWidth(80)
+        r2.addWidget(self.min_size_var)
 
-        Label(r2, text="MIN SIZE", bg=C["surface"], fg=C["text3"],
-              font=F_TINY).pack(side=LEFT)
-        self.min_size_var = StringVar()
-        Entry(r2, textvariable=self.min_size_var, font=F_SMALL, width=10,
-              bg=C["input_bg"], fg=C["text"], insertbackground=C["accent"],
-              relief=FLAT, bd=4, highlightthickness=1,
-              highlightcolor=C["accent"], highlightbackground=C["border"]).pack(side=LEFT, padx=(6, 16))
+        r2.addSpacing(16)
+        ext_lbl = QLabel("EXT FILTER")
+        ext_lbl.setFont(make_font(F_TINY))
+        ext_lbl.setStyleSheet(f"color: {C['text3']};")
+        r2.addWidget(ext_lbl)
+        self.ext_var = QLineEdit()
+        self.ext_var.setFont(make_font(F_SMALL))
+        self.ext_var.setFixedWidth(120)
+        r2.addWidget(self.ext_var)
 
-        Label(r2, text="EXT FILTER", bg=C["surface"], fg=C["text3"],
-              font=F_TINY).pack(side=LEFT)
-        self.ext_var = StringVar()
-        Entry(r2, textvariable=self.ext_var, font=F_SMALL, width=14,
-              bg=C["input_bg"], fg=C["text"], insertbackground=C["accent"],
-              relief=FLAT, bd=4, highlightthickness=1,
-              highlightcolor=C["accent"], highlightbackground=C["border"]).pack(side=LEFT, padx=(6, 16))
+        r2.addSpacing(16)
+        self.follow_sym = QCheckBox("Follow symlinks")
+        self.follow_sym.setFont(make_font(F_SMALL))
+        r2.addWidget(self.follow_sym)
+        r2.addStretch()
+        card_layout.addLayout(r2)
 
-        self.follow_sym = BooleanVar(value=False)
-        Checkbutton(r2, text="Follow symlinks", variable=self.follow_sym,
-                     bg=C["surface"], fg=C["text3"], selectcolor=C["input_bg"],
-                     activebackground=C["surface"], activeforeground=C["text2"],
-                     font=F_SMALL).pack(side=LEFT)
+        # Progress
+        self.progress = QProgressBar()
+        self.progress.setRange(0, 0)  # indeterminate
+        self.progress.setTextVisible(False)
+        self.progress.setMaximumHeight(4)
+        self.progress.setVisible(False)
+        card_layout.addWidget(self.progress)
 
-        self.progress = ttk.Progressbar(card, mode='indeterminate',
-                                         style='Scan.Horizontal.TProgressbar')
-        self.progress.pack(fill=X, pady=(8, 0))
+        layout.addWidget(card)
 
-    def _build_stats(self, parent):
-        row = Frame(parent, bg=C["bg"])
-        row.pack(fill=X, pady=(0, 10))
+    def _build_stats(self, layout):
+        row = QHBoxLayout()
+        row.setSpacing(6)
+        self.sc_size  = StatCard(None, "TOTAL SIZE", C["green"])
+        row.addWidget(self.sc_size)
+        self.sc_files = StatCard(None, "FILES", C["text"])
+        row.addWidget(self.sc_files)
+        self.sc_dirs  = StatCard(None, "DIRS", C["orange"])
+        row.addWidget(self.sc_dirs)
+        self.sc_time  = StatCard(None, "DURATION", C["purple"])
+        row.addWidget(self.sc_time)
+        self.sc_skip  = StatCard(None, "SKIPPED", C["orange"])
+        row.addWidget(self.sc_skip)
+        layout.addLayout(row)
 
-        self.sc_size  = StatCard(row, "TOTAL SIZE", C["green"])
-        self.sc_size.pack(side=LEFT, fill=X, expand=True, padx=(0, 6))
-        self.sc_files = StatCard(row, "FILES", C["text"])
-        self.sc_files.pack(side=LEFT, fill=X, expand=True, padx=(3, 3))
-        self.sc_dirs  = StatCard(row, "DIRS", C["orange"])
-        self.sc_dirs.pack(side=LEFT, fill=X, expand=True, padx=(3, 3))
-        self.sc_time  = StatCard(row, "DURATION", C["purple"])
-        self.sc_time.pack(side=LEFT, fill=X, expand=True, padx=(3, 3))
-        self.sc_skip  = StatCard(row, "SKIPPED", C["orange"])
-        self.sc_skip.pack(side=LEFT, fill=X, expand=True, padx=(3, 0))
+    def _build_toolbar(self, layout):
+        tb = QHBoxLayout()
+        tb.setSpacing(2)
 
-    def _build_toolbar(self, parent):
-        tb = Frame(parent, bg=C["bg"])
-        tb.pack(fill=X, pady=(0, 6))
-
-        self.view_dirs_btn = RoundButton(tb, text="DIRS", command=lambda: self._switch("dirs"),
+        self.view_dirs_btn = RoundButton(None, "DIRS", lambda: self._switch("dirs"),
                                           bg=C["accent"], fg="#ffffff",
                                           hover_bg=C["accent"], padx=12)
-        self.view_dirs_btn.pack(side=LEFT, padx=(0, 2))
-        self.view_files_btn = RoundButton(tb, text="FILES", command=lambda: self._switch("files"),
+        tb.addWidget(self.view_dirs_btn)
+        self.view_files_btn = RoundButton(None, "FILES", lambda: self._switch("files"),
                                            bg=C["btn_bg"], fg=C["text"],
                                            hover_bg=C["btn_hover"], padx=12)
-        self.view_files_btn.pack(side=LEFT, padx=(0, 8))
+        tb.addWidget(self.view_files_btn)
 
-        Frame(tb, bg=C["border"], width=1).pack(side=LEFT, fill=Y, padx=8)
+        sep = QFrame()
+        sep.setFrameShape(QFrame.VLine)
+        sep.setStyleSheet(f"color: {C['border']};")
+        sep.setFixedWidth(1)
+        tb.addWidget(sep)
+        tb.addSpacing(6)
 
-        self._check_all_btn = RoundButton(tb, text="CHECK PAGE", command=self._check_all_on_page,
-                                            bg=C["btn_bg"], fg=C["text"], padx=8)
-        self._check_all_btn.pack(side=LEFT, padx=(0, 2))
-        self._del_btn = RoundButton(tb, text="DELETE", command=self._delete_checked,
+        self._del_btn = RoundButton(None, "DELETE", self._delete_checked,
                                      bg="#da3633", fg="#ffffff", hover_bg="#f85149", padx=10)
-        self._del_btn.pack(side=LEFT, padx=(0, 2))
-        self._clear_btn = RoundButton(tb, text="CLEAR", command=self._clear_all_checks,
-                                       bg=C["btn_bg"], fg=C["text"], padx=8)
-        self._clear_btn.pack(side=LEFT, padx=(0, 4))
-        RoundButton(tb, text="CSV", command=lambda: self._export("csv"),
-                     bg=C["btn_bg"], fg=C["text"], padx=10).pack(side=LEFT, padx=2)
-        RoundButton(tb, text="JSON", command=lambda: self._export("json"),
-                     bg=C["btn_bg"], fg=C["text"], padx=10).pack(side=LEFT, padx=2)
+        tb.addWidget(self._del_btn)
 
-        self.tree_title = Label(tb, text="", bg=C["bg"], fg=C["text2"], font=F_SMALL)
-        self.tree_title.pack(side=RIGHT)
+        # Export 下拉菜单
+        export_btn = QToolButton()
+        export_btn.setText("EXPORT")
+        export_btn.setPopupMode(QToolButton.InstantPopup)
+        export_btn.setFont(make_font(F_BTN))
+        export_btn.setStyleSheet(f"""
+            QToolButton {{
+                background-color: {C['btn_bg']};
+                color: {C['text']};
+                border: none;
+                border-radius: 6px;
+                padding: 5px 14px;
+                font-size: 9pt;
+                font-weight: bold;
+            }}
+            QToolButton:hover {{
+                background-color: {C['btn_hover']};
+            }}
+            QToolButton::menu-indicator {{
+                image: none;
+            }}
+        """)
+        export_menu = QMenu(export_btn)
+        export_menu.setStyleSheet(f"""
+            QMenu {{
+                background-color: {C['surface']};
+                color: {C['text']};
+                border: 1px solid {C['border']};
+                border-radius: 6px;
+                padding: 4px;
+            }}
+            QMenu::item {{
+                padding: 6px 20px;
+                border-radius: 4px;
+            }}
+            QMenu::item:selected {{
+                background-color: {C['tree_sel']};
+            }}
+        """)
+        export_csv = QAction("CSV", export_btn)
+        export_csv.triggered.connect(lambda: self._export("csv"))
+        export_json = QAction("JSON", export_btn)
+        export_json.triggered.connect(lambda: self._export("json"))
+        export_menu.addAction(export_csv)
+        export_menu.addAction(export_json)
+        export_btn.setMenu(export_menu)
+        tb.addWidget(export_btn)
 
-        pg = Frame(tb, bg=C["bg"])
-        pg.pack(side=RIGHT, padx=(8, 4))
-        self._prev_btn = RoundButton(pg, text="<", command=self._prev_page,
+        tb.addStretch()
+
+        # Page nav
+        pg = QHBoxLayout()
+        pg.setSpacing(2)
+        self._prev_btn = RoundButton(None, "<", self._prev_page,
                                       bg=C["btn_bg"], fg=C["text"], padx=8, pady=2)
-        self._prev_btn.pack(side=LEFT, padx=1)
-        self._page_label = Label(pg, text="", bg=C["bg"], fg=C["text2"], font=F_SMALL)
-        self._page_label.pack(side=LEFT, padx=6)
-        self._next_btn = RoundButton(pg, text=">", command=self._next_page,
+        pg.addWidget(self._prev_btn)
+        self._page_label = QLabel("")
+        self._page_label.setFont(make_font(F_SMALL))
+        self._page_label.setStyleSheet(f"color: {C['text2']};")
+        pg.addWidget(self._page_label)
+        self._next_btn = RoundButton(None, ">", self._next_page,
                                       bg=C["btn_bg"], fg=C["text"], padx=8, pady=2)
-        self._next_btn.pack(side=LEFT, padx=1)
+        pg.addWidget(self._next_btn)
+        tb.addLayout(pg)
 
-    def _build_tree(self, parent):
-        wrap = Frame(parent, bg=C["border"], bd=1, relief=FLAT)
-        wrap.pack(fill=BOTH, expand=True, pady=(0, 6))
+        self.tree_title = QLabel("")
+        self.tree_title.setFont(make_font(F_SMALL))
+        self.tree_title.setStyleSheet(f"color: {C['text2']};")
+        tb.addWidget(self.tree_title)
 
-        inner = Frame(wrap, bg=C["tree_bg"], padx=1, pady=1)
-        inner.pack(fill=BOTH, expand=True)
+        layout.addLayout(tb)
 
-        ysb = Scrollbar(inner, orient=VERTICAL)
-        xsb = Scrollbar(inner, orient=HORIZONTAL)
-        self.tree = ttk.Treeview(inner, style='Scan.Treeview',
-                                  yscrollcommand=ysb.set, xscrollcommand=xsb.set,
-                                  selectmode='extended', show='headings')
-        ysb.config(command=self.tree.yview)
-        xsb.config(command=self.tree.xview)
-        self.tree.grid(row=0, column=0, sticky='nsew')
-        ysb.grid(row=0, column=1, sticky='ns')
-        xsb.grid(row=1, column=0, sticky='ew')
-        inner.grid_rowconfigure(0, weight=1)
-        inner.grid_columnconfigure(0, weight=1)
+    def _build_tree(self, layout):
+        wrap = QFrame()
+        wrap.setStyleSheet(f"border: 1px solid {C['border']};")
+        wrap_layout = QVBoxLayout(wrap)
+        wrap_layout.setContentsMargins(1, 1, 1, 1)
 
-        self.tree.bind('<Button-1>', self._on_click)
-        self.tree.bind('<Double-1>', self._on_dblclick)
-        self.tree.bind('<Button-3>', self._on_rightclick)
-        self.tree.bind('<<TreeviewSelect>>', self._on_select)
+        self.tree = QTableWidget()
+        self.tree.setAlternatingRowColors(True)
+        self.tree.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.tree.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.tree.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.tree.verticalHeader().setVisible(False)
+        self.tree.setShowGrid(True)
+        self.tree.setSortingEnabled(False)
+        self.tree.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.tree.customContextMenuRequested.connect(self._on_rightclick)
+        self.tree.itemSelectionChanged.connect(self._on_select)
+        self.tree.cellDoubleClicked.connect(self._on_dblclick)
+        self.tree.cellClicked.connect(self._on_cell_clicked)
+        self.tree.horizontalHeader().sectionClicked.connect(self._on_header_clicked)
 
-    def _build_detail(self, parent):
-        det = Frame(parent, bg=C["surface"], padx=14, pady=8)
-        det.pack(fill=X, pady=(0, 4))
+        wrap_layout.addWidget(self.tree)
+        layout.addWidget(wrap, stretch=1)
+        self._check_header = None  # 全选/全取消 表头控件
 
-        self.detail_var = StringVar(value="Select an item to see details   |   Double-click to drill down   |   Right-click for more")
-        Label(det, textvariable=self.detail_var, bg=C["surface"], fg=C["text2"],
-              font=F_SMALL, anchor=W).pack(side=LEFT, fill=X, expand=True)
-        self.del_cmd_var = StringVar()
-        Label(det, textvariable=self.del_cmd_var, bg=C["surface"], fg=C["red"],
-              font=F_MONO, anchor=E).pack(side=RIGHT)
+        # 表头全选 checkbox（初始隐藏，有数据时显示）
+        self._header_cb = QCheckBox(self.tree)
+        self._header_cb.setVisible(False)
+        self._header_cb.setStyleSheet("background: transparent;")
+        self._header_cb.stateChanged.connect(self._on_header_check_clicked)
+        self.tree.horizontalHeader().sectionResized.connect(self._update_header_cb_pos)
+        self.tree.horizontalHeader().sectionMoved.connect(self._update_header_cb_pos)
 
-    def _build_statusbar(self, parent):
-        sf = Frame(parent, bg=C["bg"])
-        sf.pack(fill=X)
-        self.status_var = StringVar(value="Ready")
-        Label(sf, textvariable=self.status_var, bg=C["bg"], fg=C["text3"],
-              font=F_TINY, anchor=W).pack(side=LEFT)
+    def _build_detail(self, layout):
+        det = QFrame()
+        det.setStyleSheet(f"background-color: {C['surface']}; border-radius: 6px;")
+        det_layout = QHBoxLayout(det)
+        det_layout.setContentsMargins(14, 8, 14, 8)
 
-    def _build_context_menu(self):
-        self.ctx_menu = Menu(self.root, tearoff=0,
-                              bg=C["surface"], fg=C["text"],
-                              activebackground=C["accent"],
-                              activeforeground="#ffffff",
-                              font=F_SMALL, borderwidth=1,
-                              relief=FLAT)
+        self.detail_label = QLabel("Select an item to see details   |   Double-click to drill down   |   Right-click for more")
+        self.detail_label.setFont(make_font(F_SMALL))
+        self.detail_label.setStyleSheet(f"color: {C['text2']};")
+        det_layout.addWidget(self.detail_label, stretch=1)
+
+        self.del_cmd_label = QLabel("")
+        self.del_cmd_label.setFont(make_font(F_MONO))
+        self.del_cmd_label.setStyleSheet(f"color: {C['red']};")
+        det_layout.addWidget(self.del_cmd_label)
+        layout.addWidget(det)
+
+    def _build_statusbar(self, layout):
+        self.status_label = QLabel("Ready")
+        self.status_label.setFont(make_font(F_TINY))
+        self.status_label.setStyleSheet(f"color: {C['text3']};")
+        layout.addWidget(self.status_label)
 
     # ══════════════════════════════════════════════════════
     #  扫描逻辑
@@ -267,71 +345,67 @@ class ScannerFrame(Frame):
         self._clear_tree()
         for sc in (self.sc_size, self.sc_files, self.sc_dirs, self.sc_time, self.sc_skip):
             sc.set_value("--")
-        self.status_var.set("Ready")
-        self.tree_title.config(text="")
-        self.detail_var.set("Select an item to see details   |   Double-click to drill down   |   Right-click for more")
-        self.del_cmd_var.set("")
+        self.status_label.setText("Ready")
+        self.tree_title.setText("")
+        self.detail_label.setText("Select an item to see details   |   Double-click to drill down   |   Right-click for more")
+        self.del_cmd_label.setText("")
 
     def _browse(self):
-        path = filedialog.askdirectory(title="Select directory",
-                                        initialdir=self.path_var.get() or "/")
+        path = QFileDialog.getExistingDirectory(
+            self, "Select directory",
+            self.path_entry.text() or os.path.expanduser("~"))
         if path:
-            self.path_var.set(path)
+            self.path_entry.setText(path)
 
     def _start_scan(self):
         if self._scanning:
             return
-        path = self.path_var.get().strip()
+        path = self.path_entry.text().strip()
         if not path:
-            messagebox.showerror("Error", "Please enter a path")
+            QMessageBox.critical(self, "Error", "Please enter a path")
             return
         abs_path = os.path.abspath(os.path.expanduser(path))
         if not os.path.exists(abs_path):
-            messagebox.showerror("Error", f"Path not found:\n{abs_path}")
+            QMessageBox.critical(self, "Error", f"Path not found:\n{abs_path}")
             return
         if not os.path.isdir(abs_path):
-            messagebox.showerror("Error", f"Not a directory:\n{abs_path}")
+            QMessageBox.critical(self, "Error", f"Not a directory:\n{abs_path}")
             return
 
         self._scanning = True
         self._scan_result = None
         self._scan_error = None
         self.scan_path = abs_path
-        self.status_var.set(f"Scanning {abs_path} ...")
-        self.progress.start(12)
+        self.status_label.setText(f"Scanning {abs_path} ...")
+        self.progress.setVisible(True)
         self._clear_tree()
 
-        def do_scan():
-            try:
-                scanner = Scanner(follow_symlinks=self.follow_sym.get())
-                self._scan_result = scanner.scan(abs_path)
-            except Exception as e:
-                self._scan_error = str(e)
+        self._scan_worker = ScanWorker(abs_path, self.follow_sym.isChecked())
+        self._scan_worker.finished.connect(self._on_scan_finished)
+        self._scan_worker.error.connect(self._on_scan_error)
+        self._scan_worker.start()
 
-        self._scan_thread = threading.Thread(target=do_scan, daemon=True)
-        self._scan_thread.start()
-        self.root.after(300, self._check_scan_done)
-
-    def _check_scan_done(self):
-        if self._scan_thread and self._scan_thread.is_alive():
-            self.root.after(300, self._check_scan_done)
-            return
-        self.progress.stop()
+    def _on_scan_finished(self, result):
+        self.progress.setVisible(False)
         self._scanning = False
+        self._scan_worker = None
 
-        if self._scan_error:
-            messagebox.showerror("Scan Error", self._scan_error)
-            self.status_var.set("Scan failed")
-            return
-
-        r = self._scan_result
-        self.result = r
+        self._scan_result = result
+        self.result = result
+        r = result
         skip_txt = f"  |  Skipped {r.skipped_count}" if r.skipped_count else ""
-        self.status_var.set(
+        self.status_label.setText(
             f"Done: {r.total_files:,} files, {r.total_dirs:,} dirs, "
             f"{r.scan_duration:.2f}s{skip_txt}")
         self._update_stats(r)
         self._render()
+
+    def _on_scan_error(self, error_msg):
+        self.progress.setVisible(False)
+        self._scanning = False
+        self._scan_worker = None
+        QMessageBox.critical(self, "Scan Error", error_msg)
+        self.status_label.setText("Scan failed")
 
     def _update_stats(self, r):
         self.sc_size.set_value(format_size(r.total_size))
@@ -342,12 +416,14 @@ class ScannerFrame(Frame):
 
     def _render(self):
         if not self.result:
+            self._header_cb.setVisible(False)
             return
+        self._header_cb.setVisible(True)
         r = self.result
 
         files = list(r.all_files)
-        ms = parse_size_filter(self.min_size_var.get().strip())
-        ext_str = self.ext_var.get().strip()
+        ms = parse_size_filter(self.min_size_var.text().strip())
+        ext_str = self.ext_var.text().strip()
         exts = []
         if ext_str:
             exts = [e.strip().lower() if e.strip().startswith('.')
@@ -378,81 +454,112 @@ class ScannerFrame(Frame):
         items = all_items[start:end]
         self.item_map = {}
 
-        for c in self.tree.get_children():
-            self.tree.delete(c)
-
         is_dirs = self.view_mode == "dirs"
-        arrow_d = " v" if (self.sort_col == "size" and self.sort_reverse) else \
-                  (" ^" if self.sort_col == "size" else "")
-
         if is_dirs:
-            cols = ("check", "path", "size", "files", "subdirs", "pct", "modified")
-            self.tree.config(columns=cols)
-            self.tree.heading("check", text="")
-            self.tree.heading("path", text="Path", command=lambda: self._sort_by("path"))
-            self.tree.heading("size", text=f"Size{arrow_d}", command=lambda: self._sort_by("size"))
-            self.tree.heading("files", text="Files", command=lambda: self._sort_by("files"))
-            self.tree.heading("subdirs", text="SubDirs", command=lambda: self._sort_by("subdirs"))
-            self.tree.heading("pct", text="%")
-            self.tree.heading("modified", text="Modified", command=lambda: self._sort_by("modified"))
-            self.tree.column("check", width=36, anchor='center', minwidth=30, stretch=False)
-            self.tree.column("path", width=500, minwidth=200)
-            self.tree.column("size", width=110, anchor=E, minwidth=80)
-            self.tree.column("files", width=80, anchor=E, minwidth=60)
-            self.tree.column("subdirs", width=80, anchor=E, minwidth=60)
-            self.tree.column("pct", width=70, anchor=E, minwidth=50)
-            self.tree.column("modified", width=150, minwidth=100)
+            cols = ["check", "path", "size", "files", "subdirs", "pct", "modified"]
+            widths = [50, 0, 130, 80, 80, 70, 150]  # 0 = Stretch
+            header_labels = [
+                "",
+                f"Path",
+                f"Size{self._arrow('size')}",
+                f"Files{self._arrow('files')}",
+                f"SubDirs{self._arrow('subdirs')}",
+                "%",
+                f"Modified{self._arrow('modified')}",
+            ]
         else:
-            cols = ("check", "path", "size", "ext", "pct", "modified")
-            self.tree.config(columns=cols)
-            self.tree.heading("check", text="")
-            self.tree.heading("path", text="Path", command=lambda: self._sort_by("path"))
-            self.tree.heading("size", text=f"Size{arrow_d}", command=lambda: self._sort_by("size"))
-            self.tree.heading("ext", text="Type", command=lambda: self._sort_by("ext"))
-            self.tree.heading("pct", text="%")
-            self.tree.heading("modified", text="Modified", command=lambda: self._sort_by("modified"))
-            self.tree.column("check", width=36, anchor='center', minwidth=30, stretch=False)
-            self.tree.column("path", width=540, minwidth=200)
-            self.tree.column("size", width=110, anchor=E, minwidth=80)
-            self.tree.column("ext", width=80, minwidth=50)
-            self.tree.column("pct", width=70, anchor=E, minwidth=50)
-            self.tree.column("modified", width=150, minwidth=100)
+            cols = ["check", "path", "size", "ext", "pct", "modified"]
+            widths = [50, 0, 130, 80, 70, 150]  # 0 = Stretch
+            header_labels = [
+                "",
+                f"Path",
+                f"Size{self._arrow('size')}",
+                f"Type{self._arrow('ext')}",
+                "%",
+                f"Modified{self._arrow('modified')}",
+            ]
+
+        self.tree.setColumnCount(len(cols))
+        self.tree.setHorizontalHeaderLabels(header_labels)
+        header = self.tree.horizontalHeader()
+        # check 列 (0): Fixed 固定宽度
+        header.setSectionResizeMode(0, QHeaderView.Fixed)
+        self.tree.setColumnWidth(0, 50)
+        # path 列 (1): Stretch 自动填满剩余空间
+        header.setSectionResizeMode(1, QHeaderView.Stretch)
+        # 其余列: Interactive 可手动拖拽调整
+        for i, w in enumerate(widths):
+            if i >= 2 and w > 0:
+                header.setSectionResizeMode(i, QHeaderView.Interactive)
+                self.tree.setColumnWidth(i, w)
+        self.tree.setRowCount(len(items))
+        self._cols = cols
 
         total = max(r.total_size, 1)
         for i, node in enumerate(items):
             iid = str(i)
             self.item_map[iid] = node
-            pct = f"{node.size / total * 100:.1f}%"
+            pct = f"{round(node.size / total * 100)}%"
             checked = node.path in self._checked_paths
-            ck = "[x]" if checked else "[ ]"
-            base_tag = 'odd' if i % 2 else 'even'
-            tag = f'{base_tag}_checked' if checked else base_tag
-            if is_dirs:
-                vals = (ck, node.path, format_size(node.size), node.file_count,
-                        node.dir_count, pct, fmt_time(node.modified))
-            else:
-                vals = (ck, node.path, format_size(node.size), node.extension or "-",
-                        pct, fmt_time(node.modified))
-            self.tree.insert('', END, iid=iid, values=vals, tags=(tag,))
 
-        self.tree.tag_configure('odd', background=C["tree_row1"])
-        self.tree.tag_configure('even', background=C["tree_row2"])
-        self.tree.tag_configure('odd_checked', background=C["checked_odd"])
-        self.tree.tag_configure('even_checked', background=C["checked_even"])
+            if is_dirs:
+                vals = ["", node.path, format_size(node.size), str(node.file_count),
+                        str(node.dir_count), pct, fmt_time(node.modified)]
+            else:
+                vals = ["", node.path, format_size(node.size), node.extension or "-",
+                        pct, fmt_time(node.modified)]
+
+            # Determine row background
+            base = 'odd' if i % 2 else 'even'
+            if checked:
+                bg = QColor(C["checked_odd"] if base == 'odd' else C["checked_even"])
+            else:
+                bg = QColor(C["tree_row1"] if base == 'odd' else C["tree_row2"])
+
+            for j, val in enumerate(vals):
+                item = QTableWidgetItem(val)
+                item.setBackground(bg)
+                if j == 0:
+                    # 保留文本标记以兼容测试
+                    item.setFlags(item.flags() & ~Qt.ItemIsSelectable)
+                    item.setText("[x]" if checked else "[ ]")
+                    self.tree.setItem(i, j, item)
+                elif j in (2, 3, 4, 5) and not is_dirs or j in (2, 3, 4, 5, 6) and is_dirs:
+                    if j >= 2:
+                        item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+                    self.tree.setItem(i, j, item)
+                else:
+                    if j == 1:
+                        # Path 列：省略显示，tooltip 显示完整路径
+                        fm = QFontMetrics(self.tree.font())
+                        col_width = self.tree.columnWidth(1)
+                        max_width = max(col_width - 20, 100)
+                        elided = fm.elidedText(val, Qt.ElideMiddle, max_width)
+                        item.setText(elided)
+                        item.setToolTip(val)
+                    self.tree.setItem(i, j, item)
+
+        self._update_header_check()
+        QTimer.singleShot(0, self._update_header_cb_pos)
 
         vlabel = "Directories" if self.view_mode == "dirs" else "Files"
         checked_count = len(self._checked_paths)
         if checked_count > 0:
-            self.tree_title.config(
-                text=f"{vlabel} ({self._total_items:,})  |  Checked: {checked_count}")
+            self.tree_title.setText(
+                f"{vlabel} ({self._total_items:,})  |  Checked: {checked_count}")
         else:
-            self.tree_title.config(text=f"{vlabel} ({self._total_items:,})")
+            self.tree_title.setText(f"{vlabel} ({self._total_items:,})")
 
-        max_page = max(0, (self._total_items - 1) // self._page_size)
         if self._total_items == 0:
-            self._page_label.config(text="")
+            self._page_label.setText("")
         else:
-            self._page_label.config(text=f"{self._page + 1}/{max_page + 1}")
+            self._page_label.setText(f"{self._page + 1}/{max_page + 1}")
+
+    def _arrow(self, col):
+        """返回排序箭头指示符"""
+        if col != self.sort_col:
+            return ""
+        return "\u25bc" if self.sort_reverse else "\u25b2"
 
     # ── 分页导航 ──
 
@@ -472,10 +579,20 @@ class ScannerFrame(Frame):
     def _sort_mode_key(self):
         if self.sort_col == "size":
             return "size-desc" if self.sort_reverse else "size-asc"
-        elif self.sort_col in ("name", "path"):
-            return "name"
+        elif self.sort_col == "name":
+            return "name-desc" if self.sort_reverse else "name"
+        elif self.sort_col == "path":
+            return "path-desc" if self.sort_reverse else "path"
         elif self.sort_col == "modified":
-            return "modified"
+            return "modified" if self.sort_reverse else "modified-asc"
+        elif self.sort_col == "pct":
+            return "size-desc" if self.sort_reverse else "size-asc"
+        elif self.sort_col == "files":
+            return "files-desc" if self.sort_reverse else "files-asc"
+        elif self.sort_col == "subdirs":
+            return "subdirs-desc" if self.sort_reverse else "subdirs-asc"
+        elif self.sort_col == "ext":
+            return "ext-desc" if self.sort_reverse else "ext"
         return "size-desc"
 
     def _sort_by(self, col):
@@ -487,34 +604,97 @@ class ScannerFrame(Frame):
         self._page = 0
         self._render()
 
+    def _on_header_clicked(self, logical_index):
+        if not hasattr(self, '_cols'):
+            return
+        if logical_index < len(self._cols):
+            col_name = self._cols[logical_index]
+            sortable = {"path", "size", "files", "subdirs", "ext", "pct", "modified", "name"}
+            if col_name in sortable:
+                self._sort_by(col_name)
+
     # ── 视图切换 ──
 
     def _switch(self, mode):
         self.view_mode = mode
         self._page = 0
         if mode == "dirs":
-            self.view_dirs_btn._bg = C["accent"]
-            self.view_dirs_btn._fg = "#ffffff"
-            self.view_dirs_btn._draw(C["accent"])
-            self.view_files_btn._bg = C["btn_bg"]
-            self.view_files_btn._fg = C["text"]
-            self.view_files_btn._draw(C["btn_bg"])
+            self.view_dirs_btn.config(bg=C["accent"], fg="#ffffff")
+            self.view_files_btn.config(bg=C["btn_bg"], fg=C["text"])
         else:
-            self.view_dirs_btn._bg = C["btn_bg"]
-            self.view_dirs_btn._fg = C["text"]
-            self.view_dirs_btn._draw(C["btn_bg"])
-            self.view_files_btn._bg = C["accent"]
-            self.view_files_btn._fg = "#ffffff"
-            self.view_files_btn._draw(C["accent"])
+            self.view_dirs_btn.config(bg=C["btn_bg"], fg=C["text"])
+            self.view_files_btn.config(bg=C["accent"], fg="#ffffff")
         self._render()
 
     # ── 事件处理 ──
 
-    def _on_select(self, event):
-        sel = self.tree.selection()
-        if not sel:
+    def _on_checkbox_changed(self, row, state):
+        """QCheckBox 状态变化回调"""
+        iid = str(row)
+        node = self.item_map.get(iid)
+        if not node:
             return
-        node = self.item_map.get(sel[0])
+        checked = (state == Qt.Checked)
+        if checked:
+            self._checked_paths.add(node.path)
+        else:
+            self._checked_paths.discard(node.path)
+        # 同步底层 item 文本（兼容测试）
+        item = self.tree.item(row, 0)
+        if item:
+            item.setText("[x]" if checked else "[ ]")
+        # 更新行背景
+        self._update_row_bg(row, checked)
+        self._update_check_count()
+        self._update_header_check()
+
+    def _on_header_check_clicked(self):
+        """点击表头 全选/全取消 按钮"""
+        if not hasattr(self, '_header_cb'):
+            return
+        checked = self._header_cb.isChecked()
+        if checked:
+            self._check_all_on_page()
+        else:
+            self._uncheck_all_on_page()
+
+    def _update_header_check(self):
+        """更新全选/全取消按钮状态提示"""
+        if not hasattr(self, '_header_cb'):
+            return
+        row_count = self.tree.rowCount()
+        if row_count == 0:
+            self._header_cb.setChecked(False)
+            return
+        all_checked = True
+        for i in range(row_count):
+            iid = str(i)
+            node = self.item_map.get(iid)
+            if node and node.path not in self._checked_paths:
+                all_checked = False
+                break
+        self._header_cb.blockSignals(True)
+        self._header_cb.setChecked(all_checked)
+        self._header_cb.blockSignals(False)
+
+    def _update_header_cb_pos(self):
+        """更新表头 checkbox 位置"""
+        header = self.tree.horizontalHeader()
+        x = header.sectionPosition(0)
+        w = header.sectionSize(0)
+        h = header.height()
+        cb_size = self._header_cb.sizeHint()
+        cx = x + (w - cb_size.width()) // 2
+        cy = (h - cb_size.height()) // 2
+        self._header_cb.move(cx, cy)
+        self._header_cb.resize(cb_size.width(), cb_size.height())
+
+    def _on_select(self):
+        row = self.tree.currentRow()
+        if row < 0:
+            return
+        iid = str(row)
+        node = self.item_map.get(iid)
         if not node:
             return
         if isinstance(node, DirNode):
@@ -524,88 +704,78 @@ class ScannerFrame(Frame):
         else:
             cmd = f'rm "{node.path}"'
             info = f"[FILE] {node.path}   {format_size(node.size)}   {node.extension or '?'}"
-        self.detail_var.set(info)
-        self.del_cmd_var.set(f"$ {cmd}")
+        self.detail_label.setText(info)
+        self.del_cmd_label.setText(f"$ {cmd}")
 
-    def _on_dblclick(self, event):
-        sel = self.tree.selection()
-        if not sel:
-            return
-        node = self.item_map.get(sel[0])
+    def _on_cell_clicked(self, row, col):
+        """单击单元格时切换勾选状态（仅限第一列）"""
+        if col == 0:
+            iid = str(row)
+            self._toggle_check(iid)
+
+    def _on_dblclick(self, row, col):
+        iid = str(row)
+        node = self.item_map.get(iid)
         if not node:
             return
         if os.path.isdir(node.path):
-            self.path_var.set(node.path)
-            messagebox.showinfo("Info", f"Scan path set to:\n{node.path}")
+            self.path_entry.setText(node.path)
+            QMessageBox.information(self, "Info", f"Scan path set to:\n{node.path}")
         else:
-            self.path_var.set(os.path.dirname(node.path))
+            self.path_entry.setText(os.path.dirname(node.path))
 
-    def _on_rightclick(self, event):
-        sel = self.tree.selection()
-        if not sel:
+    def _on_rightclick(self, pos):
+        item = self.tree.itemAt(pos)
+        if not item:
             return
-        self._ctx_sel = sel
-        m = self.ctx_menu
-        m.delete(0, END)
-
-        iid = sel[0]
+        row = item.row()
+        iid = str(row)
+        self._current_row = iid
         node = self.item_map.get(iid)
-        if node:
-            if node.path in self._checked_paths:
-                m.add_command(label="  Uncheck", command=lambda: self._toggle_check(iid))
-            else:
-                m.add_command(label="  Check", command=lambda: self._toggle_check(iid))
+        if not node:
+            return
 
-        m.add_command(label="  Check all on page", command=self._check_all_on_page)
-        m.add_command(label="  Uncheck all on page", command=self._uncheck_all_on_page)
-        m.add_separator()
-        m.add_command(label="  Copy path", command=self._ctx_copy_path)
-        m.add_command(label="  Copy parent dir", command=self._ctx_copy_dir)
-        m.add_separator()
-        m.add_command(label="  Scan this dir", command=lambda: self._ctx_scan(sel))
-        try:
-            m.tk_popup(event.x_root, event.y_root)
-        finally:
-            m.grab_release()
+        m = QMenu(self)
+        if node.path in self._checked_paths:
+            m.addAction("Uncheck", lambda: self._toggle_check(iid))
+        else:
+            m.addAction("Check", lambda: self._toggle_check(iid))
+
+        m.addAction("Check all on page", self._check_all_on_page)
+        m.addAction("Uncheck all on page", self._uncheck_all_on_page)
+        m.addSeparator()
+        m.addAction("Copy path", self._ctx_copy_path)
+        m.addAction("Copy parent dir", self._ctx_copy_dir)
+        m.addSeparator()
+        m.addAction("Scan this dir", lambda: self._ctx_scan(iid))
+
+        m.exec_(self.tree.viewport().mapToGlobal(pos))
 
     def _ctx_copy_path(self):
-        sel = self.tree.selection()
-        if sel:
-            node = self.item_map.get(sel[0])
+        row = self._current_row
+        if row is not None:
+            node = self.item_map.get(str(row))
             if node:
-                self.root.clipboard_clear()
-                self.root.clipboard_append(node.path)
-                self.status_var.set(f"Copied: {node.path}")
+                QApplication.clipboard().setText(node.path)
+                self.status_label.setText(f"Copied: {node.path}")
 
     def _ctx_copy_dir(self):
-        sel = self.tree.selection()
-        if sel:
-            node = self.item_map.get(sel[0])
+        row = self._current_row
+        if row is not None:
+            node = self.item_map.get(str(row))
             if node:
                 d = node.path if isinstance(node, DirNode) else os.path.dirname(node.path)
-                self.root.clipboard_clear()
-                self.root.clipboard_append(d)
-                self.status_var.set(f"Copied: {d}")
+                QApplication.clipboard().setText(d)
+                self.status_label.setText(f"Copied: {d}")
 
-    def _ctx_scan(self, sel):
-        node = self.item_map.get(sel[0])
+    def _ctx_scan(self, iid):
+        node = self.item_map.get(str(iid))
         if node:
             d = node.path if isinstance(node, DirNode) else os.path.dirname(node.path)
-            self.path_var.set(d)
+            self.path_entry.setText(d)
             self._start_scan()
 
     # ── 勾选操作 ──
-
-    def _on_click(self, event):
-        region = self.tree.identify_region(event.x, event.y)
-        if region not in ('cell', 'heading'):
-            return
-        col = self.tree.identify_column(event.x)
-        if col == '#1':
-            iid = self.tree.identify_row(event.y)
-            if iid:
-                self._toggle_check(iid)
-                return "break"
 
     def _toggle_check(self, iid):
         node = self.item_map.get(iid)
@@ -619,41 +789,64 @@ class ScannerFrame(Frame):
         self._update_check_count()
 
     def _update_row_check(self, iid, path):
+        row = int(iid)
         checked = path in self._checked_paths
-        ck = "[x]" if checked else "[ ]"
-        vals = list(self.tree.item(iid, 'values'))
-        vals[0] = ck
-        self.tree.item(iid, values=vals)
-        old_tags = self.tree.item(iid, 'tags')
-        if old_tags:
-            base = old_tags[0].replace('_checked', '')
-            new_tag = f'{base}_checked' if checked else base
-            self.tree.item(iid, tags=(new_tag,))
+
+        # 更新 QCheckBox 控件（阻止信号避免递归）
+        cb = self.tree.cellWidget(row, 0)
+        if cb:
+            cb.blockSignals(True)
+            cb.setChecked(checked)
+            cb.blockSignals(False)
+
+        # 同步底层 item 文本
+        item = self.tree.item(row, 0)
+        if item:
+            item.setText("[x]" if checked else "[ ]")
+
+        # 更新行背景
+        self._update_row_bg(row, checked)
+
+    def _update_row_bg(self, row, checked):
+        """根据勾选状态更新整行背景色"""
+        base = 'odd' if row % 2 else 'even'
+        if checked:
+            bg = QColor(C["checked_odd"] if base == 'odd' else C["checked_even"])
+        else:
+            bg = QColor(C["tree_row1"] if base == 'odd' else C["tree_row2"])
+        for col in range(self.tree.columnCount()):
+            item = self.tree.item(row, col)
+            if item:
+                item.setBackground(bg)
 
     def _update_check_count(self):
         count = len(self._checked_paths)
         vlabel = "Directories" if self.view_mode == "dirs" else "Files"
         if count > 0:
-            self.tree_title.config(
-                text=f"{vlabel} ({self._total_items:,})  |  Checked: {count}")
+            self.tree_title.setText(
+                f"{vlabel} ({self._total_items:,})  |  Checked: {count}")
         else:
-            self.tree_title.config(text=f"{vlabel} ({self._total_items:,})")
+            self.tree_title.setText(f"{vlabel} ({self._total_items:,})")
 
     def _check_all_on_page(self):
-        for iid in self.tree.get_children():
+        for i in range(self.tree.rowCount()):
+            iid = str(i)
             node = self.item_map.get(iid)
             if node:
                 self._checked_paths.add(node.path)
                 self._update_row_check(iid, node.path)
         self._update_check_count()
+        self._update_header_check()
 
     def _uncheck_all_on_page(self):
-        for iid in self.tree.get_children():
+        for i in range(self.tree.rowCount()):
+            iid = str(i)
             node = self.item_map.get(iid)
             if node:
                 self._checked_paths.discard(node.path)
                 self._update_row_check(iid, node.path)
         self._update_check_count()
+        self._update_header_check()
 
     def _clear_all_checks(self):
         self._checked_paths.clear()
@@ -663,8 +856,9 @@ class ScannerFrame(Frame):
 
     def _delete_checked(self):
         if not self._checked_paths:
-            InfoDialog(self.root, "Info",
-                       "No items checked.\nClick the checkbox column to select items.")
+            InfoDialog(self.root, "No Selection",
+                       "Please select at least one item to delete.\n"
+                       "Click the first column [ ] to mark items for deletion.")
             return
 
         nodes = []
@@ -744,8 +938,8 @@ class ScannerFrame(Frame):
                 errors.append(f"{node.path}: {e}")
 
             if (i + 1) % 50 == 0:
-                self.status_var.set(f"Deleting... {i + 1}/{total}")
-                self.root.update_idletasks()
+                self.status_label.setText(f"Deleting... {i + 1}/{total}")
+                QApplication.processEvents()
 
         self._del_btn.config(state='normal')
 
@@ -765,7 +959,7 @@ class ScannerFrame(Frame):
             InfoDialog(self.root, "Done", ", ".join(summary_parts),
                        msg_color=C["green"])
 
-        self.status_var.set(
+        self.status_label.setText(
             f"Deleted {deleted}/{total}" +
             (f", failed {len(errors)}" if errors else "") +
             (f", blocked {blocked_count}" if blocked_count else ""))
@@ -776,14 +970,13 @@ class ScannerFrame(Frame):
 
     def _export(self, fmt):
         if not self.result:
-            messagebox.showwarning("Warning", "Please scan first")
+            QMessageBox.warning(self, "Warning", "Please scan first")
             return
         r = self.result
         ext = "json" if fmt == "json" else "csv"
-        path = filedialog.asksaveasfilename(
-            title="Export", defaultextension=f".{ext}",
-            filetypes=[("CSV", "*.csv"), ("JSON", "*.json")],
-            initialfile=f"disk_scan.{ext}")
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Export", f"disk_scan.{ext}",
+            "CSV (*.csv);;JSON (*.json)")
         if not path:
             return
         try:
@@ -814,14 +1007,13 @@ class ScannerFrame(Frame):
                         w.writerow(["Dir", n.name, n.path, n.size, format_size(n.size), fmt_time(n.modified)])
                     for n in sort_nodes(r.all_files, "size-desc"):
                         w.writerow(["File", n.name, n.path, n.size, format_size(n.size), fmt_time(n.modified)])
-            messagebox.showinfo("Export OK", f"Saved to:\n{path}")
-            self.status_var.set(f"Exported: {path}")
+            QMessageBox.information(self, "Export OK", f"Saved to:\n{path}")
+            self.status_label.setText(f"Exported: {path}")
         except Exception as e:
-            messagebox.showerror("Export Failed", str(e))
+            QMessageBox.critical(self, "Export Failed", str(e))
 
     def _clear_tree(self):
-        for c in self.tree.get_children():
-            self.tree.delete(c)
+        self.tree.setRowCount(0)
         self.item_map.clear()
         self._checked_paths.clear()
 

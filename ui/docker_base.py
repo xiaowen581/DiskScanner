@@ -1,64 +1,65 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-docker_base.py — Docker tab 基类，提供 Treeview + checkbox 通用逻辑
+docker_base.py — Docker tab 基类 (PyQt5 版本)
+提供 QTableWidget + checkbox 通用逻辑
 """
 
-from tkinter import (
-    ttk, Frame, Label, StringVar, Scrollbar,
-    VERTICAL, HORIZONTAL, LEFT, RIGHT, BOTH, X, Y, END, W, E, FLAT,
+from PyQt5.QtWidgets import (
+    QWidget, QVBoxLayout, QHBoxLayout, QLabel,
+    QTableWidget, QTableWidgetItem, QHeaderView,
+    QAbstractItemView, QApplication,
 )
+from PyQt5.QtCore import Qt
+from PyQt5.QtGui import QColor
+
 from ui.theme import (
-    C, F_SMALL, F_TINY, F_BTN,
+    C, F_SMALL, F_TINY, F_BTN, make_font,
     RoundButton, ConfirmDialog, InfoDialog,
 )
 
 
-class DockerTabBase(Frame):
+class DockerTabBase(QWidget):
     """Base class for Docker management tabs."""
 
     def __init__(self, parent, app):
-        super().__init__(parent, bg=C["bg"])
+        super().__init__(parent)
         self.app = app
-        self.root = app  # 主 Tk 窗口
+        self.root = app  # 主窗口
         self._checked = set()
         self.item_map = {}
         self._build()
 
     def _build(self):
-        outer = Frame(self, bg=C["bg"])
-        outer.pack(fill=BOTH, expand=True, padx=16, pady=12)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(16, 12, 16, 12)
+        outer.setSpacing(6)
 
-        tb = Frame(outer, bg=C["bg"])
-        tb.pack(fill=X, pady=(0, 6))
+        tb = QHBoxLayout()
         self._build_toolbar(tb)
+        outer.addLayout(tb)
 
-        wrap = Frame(outer, bg=C["border"], bd=1, relief=FLAT)
-        wrap.pack(fill=BOTH, expand=True, pady=(0, 6))
-        inner = Frame(wrap, bg=C["tree_bg"], padx=1, pady=1)
-        inner.pack(fill=BOTH, expand=True)
+        # Table
+        self.tree = QTableWidget()
+        self.tree.setAlternatingRowColors(True)
+        self.tree.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.tree.setSelectionMode(QAbstractItemView.ExtendedSelection)
+        self.tree.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.tree.verticalHeader().setVisible(False)
+        self.tree.setShowGrid(True)
+        self.tree.setSortingEnabled(False)
 
-        ysb = Scrollbar(inner, orient=VERTICAL)
-        xsb = Scrollbar(inner, orient=HORIZONTAL)
-        self.tree = ttk.Treeview(inner, style='Docker.Treeview',
-                                  yscrollcommand=ysb.set, xscrollcommand=xsb.set,
-                                  selectmode='extended', show='headings')
-        ysb.config(command=self.tree.yview)
-        xsb.config(command=self.tree.xview)
-        self.tree.grid(row=0, column=0, sticky='nsew')
-        ysb.grid(row=0, column=1, sticky='ns')
-        xsb.grid(row=1, column=0, sticky='ew')
-        inner.grid_rowconfigure(0, weight=1)
-        inner.grid_columnconfigure(0, weight=1)
-        self.tree.bind('<Button-1>', self._on_click)
+        self.tree.cellClicked.connect(self._on_click)
 
-        sf = Frame(outer, bg=C["bg"])
-        sf.pack(fill=X)
-        self.status_var = StringVar(value="Ready")
-        Label(sf, textvariable=self.status_var, bg=C["bg"], fg=C["text3"],
-              font=F_TINY, anchor=W).pack(side=LEFT)
+        outer.addWidget(self.tree, stretch=1)
 
-    def _build_toolbar(self, parent):
+        # Status
+        self.status_label = QLabel("Ready")
+        self.status_label.setFont(make_font(F_TINY))
+        self.status_label.setStyleSheet(f"color: {C['text3']};")
+        outer.addWidget(self.status_label)
+
+    def _build_toolbar(self, layout):
         """Override in subclass."""
         pass
 
@@ -66,16 +67,10 @@ class DockerTabBase(Frame):
         """Override in subclass to load data."""
         pass
 
-    def _on_click(self, event):
-        region = self.tree.identify_region(event.x, event.y)
-        if region not in ('cell', 'heading'):
-            return
-        col = self.tree.identify_column(event.x)
-        if col == '#1':
-            iid = self.tree.identify_row(event.y)
-            if iid:
-                self._toggle_check(iid)
-                return "break"
+    def _on_click(self, row, col):
+        if col == 0:
+            iid = str(row)
+            self._toggle_check(iid)
 
     def _toggle_check(self, iid):
         if iid in self._checked:
@@ -84,14 +79,23 @@ class DockerTabBase(Frame):
             self._checked.add(iid)
         checked = iid in self._checked
         ck = "[x]" if checked else "[ ]"
-        vals = list(self.tree.item(iid, 'values'))
-        vals[0] = ck
-        self.tree.item(iid, values=vals)
-        old_tags = self.tree.item(iid, 'tags')
-        if old_tags:
-            base = old_tags[0].replace('_checked', '')
-            new_tag = f'{base}_checked' if checked else base
-            self.tree.item(iid, tags=(new_tag,))
+        row = int(iid)
+
+        item = self.tree.item(row, 0)
+        if item:
+            item.setText(ck)
+
+        # Update row background
+        base = 'odd' if row % 2 else 'even'
+        if checked:
+            bg = QColor(C["checked_odd"] if base == 'odd' else C["checked_even"])
+        else:
+            bg = QColor(C["tree_row1"] if base == 'odd' else C["tree_row2"])
+        for c in range(self.tree.columnCount()):
+            ci = self.tree.item(row, c)
+            if ci:
+                ci.setBackground(bg)
+
         self._update_check_count()
 
     def _update_check_count(self):
@@ -99,7 +103,8 @@ class DockerTabBase(Frame):
         pass
 
     def _check_all(self):
-        for iid in self.tree.get_children():
+        for i in range(self.tree.rowCount()):
+            iid = str(i)
             if iid not in self._checked:
                 self._toggle_check(iid)
         self._update_check_count()
@@ -109,35 +114,40 @@ class DockerTabBase(Frame):
         self._reload_rows()
 
     def _make_btn(self, parent, text, cmd, **kw):
-        return RoundButton(parent, text=text, command=cmd,
-                            bg=kw.pop('bg', C["btn_bg"]),
-                            fg=kw.pop('fg', C["text"]),
-                            hover_bg=kw.pop('hover_bg', C["btn_hover"]),
-                            padx=kw.pop('padx', 10), **kw)
+        btn = RoundButton(parent, text, cmd,
+                           bg=kw.pop('bg', C["btn_bg"]),
+                           fg=kw.pop('fg', C["text"]),
+                           hover_bg=kw.pop('hover_bg', C["btn_hover"]),
+                           padx=kw.pop('padx', 10))
+        return btn
 
-    def _setup_columns(self, cols, widths, anchors=None, headings=None):
-        self.tree.config(columns=cols)
-        anchors = anchors or {}
+    def _setup_columns(self, cols, widths, alignments=None, headings=None):
+        self.tree.setColumnCount(len(cols))
+        alignments = alignments or {}
         headings = headings or {}
-        for c in cols:
-            self.tree.heading(c, text=headings.get(c, c))
-            self.tree.column(c, width=widths.get(c, 120),
-                             anchor=anchors.get(c, W),
-                             minwidth=30)
+        labels = [headings.get(c, c) for c in cols]
+        self.tree.setHorizontalHeaderLabels(labels)
+        for i, c in enumerate(cols):
+            self.tree.setColumnWidth(i, widths.get(c, 120))
+        self._cols = cols
 
     def _clear_tree(self):
-        for c in self.tree.get_children():
-            self.tree.delete(c)
+        self.tree.setRowCount(0)
         self.item_map.clear()
         self._checked.clear()
 
     def _insert_row(self, iid, values, idx):
-        tag = 'odd' if idx % 2 else 'even'
-        self.tree.insert('', END, iid=iid, values=values, tags=(tag,))
-        self.tree.tag_configure('odd', background=C["tree_row1"])
-        self.tree.tag_configure('even', background=C["tree_row2"])
-        self.tree.tag_configure('odd_checked', background=C["checked_odd"])
-        self.tree.tag_configure('even_checked', background=C["checked_even"])
+        row = int(iid)
+        base = 'odd' if idx % 2 else 'even'
+        bg = QColor(C["tree_row1"] if base == 'odd' else C["tree_row2"])
+
+        for j, val in enumerate(values):
+            item = QTableWidgetItem(str(val))
+            item.setBackground(bg)
+            if j == 0:
+                item.setTextAlignment(Qt.AlignCenter)
+                item.setFlags(item.flags() & ~Qt.ItemIsSelectable)
+            self.tree.setItem(row, j, item)
 
     def _show_result(self, title, results):
         ok = sum(1 for r in results if r.success)

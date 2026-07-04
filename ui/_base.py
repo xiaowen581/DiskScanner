@@ -1,15 +1,17 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-_base.py — 平台无关的公共组件和工具函数
+_base.py — PyQt5 平台无关的公共组件和工具函数
 包含 RoundButton、StatCard、ConfirmDialog、InfoDialog、fmt_time
 """
 
-import tkinter.font as tkfont
-from tkinter import (
-    ttk, Frame, Label, Canvas, Scrollbar, Toplevel,
-    VERTICAL, LEFT, RIGHT, BOTH, X, Y, END, E, W, FLAT,
+from PyQt5.QtWidgets import (
+    QPushButton, QFrame, QVBoxLayout, QHBoxLayout,
+    QLabel, QDialog, QTableWidget, QTableWidgetItem,
+    QHeaderView, QSizePolicy, QTextEdit,
 )
+from PyQt5.QtCore import Qt
+from PyQt5.QtGui import QColor, QFontMetrics
 
 
 # ── 测试模式：设为 True 时对话框自动跳过，不弹窗 ──
@@ -25,13 +27,14 @@ def _get_theme():
 
 
 # ══════════════════════════════════════════════════════════
-#  自定义按钮 (Canvas 实现圆角 + 悬停效果)
+#  自定义按钮 (QPushButton + QSS)
 # ══════════════════════════════════════════════════════════
 
-class RoundButton(Canvas):
+class RoundButton(QPushButton):
     """带圆角和悬停效果的按钮"""
     def __init__(self, parent, text, command, bg=None, fg=None,
                  hover_bg=None, radius=6, padx=14, pady=5, font=None, **kw):
+        super().__init__(text, parent)
         C, F_BTN, *_ = _get_theme()
         if font is None:
             font = F_BTN
@@ -39,71 +42,78 @@ class RoundButton(Canvas):
         self._bg = bg or C["btn_bg"]
         self._fg = fg or C["text"]
         self._hover = hover_bg or C["btn_hover"]
-        self._cmd = command
         self._radius = radius
-        self._text = text
-        self._font = font
+        self._padx = padx
+        self._pady = pady
 
-        try:
-            tf = tkfont.Font(font=font)
-            tw = tf.measure(text)
-            th = tf.metrics("linespace")
-        except Exception:
-            tw = len(text) * 8
-            th = 14
+        self.clicked.connect(command)
+        self._apply_style()
 
-        w = int(tw + padx * 2)
-        h = int(th + pady * 2)
-        self._bw, self._bh = w, h
+        from ui.theme import make_font
+        self.setFont(make_font(font))
 
-        super().__init__(parent, width=w, height=h,
-                         bg=parent.cget("bg"), highlightthickness=0, **kw)
-        self._draw(self._bg)
-        self.bind("<Enter>", lambda e: self._draw(self._hover))
-        self.bind("<Leave>", lambda e: self._draw(self._bg))
-        self.bind("<Button-1>", lambda e: self._cmd())
-
-    def _draw(self, fill):
-        self.delete("all")
-        r, w, h = self._radius, self._bw, self._bh
-        self.create_arc(0, 0, 2*r, 2*r, start=90, extent=90, fill=fill, outline="")
-        self.create_arc(w-2*r, 0, w, 2*r, start=0, extent=90, fill=fill, outline="")
-        self.create_arc(0, h-2*r, 2*r, h, start=180, extent=90, fill=fill, outline="")
-        self.create_arc(w-2*r, h-2*r, w, h, start=270, extent=90, fill=fill, outline="")
-        self.create_rectangle(r, 0, w-r, h, fill=fill, outline="")
-        self.create_rectangle(0, r, w, h-r, fill=fill, outline="")
-        self.create_text(w//2, h//2, text=self._text, fill=self._fg, font=self._font)
+    def _apply_style(self):
+        self.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {self._bg};
+                color: {self._fg};
+                border: none;
+                border-radius: {self._radius}px;
+                padding: {self._pady}px {self._padx}px;
+            }}
+            QPushButton:hover {{
+                background-color: {self._hover};
+            }}
+            QPushButton:pressed {{
+                background-color: {self._hover};
+            }}
+            QPushButton:disabled {{
+                background-color: #44444444;
+                color: #88888888;
+            }}
+        """)
 
     def config(self, bg=None, fg=None, **kw):
         if bg:
             self._bg = bg
-            self._draw(self._bg)
         if fg:
             self._fg = fg
-            self._draw(self._bg)
-        if kw:
-            super().config(**kw)
+        self._apply_style()
+        if 'state' in kw:
+            self.setEnabled(kw['state'] != 'disabled')
+        if 'text' in kw:
+            self.setText(kw['text'])
 
 
 # ══════════════════════════════════════════════════════════
 #  统计卡片
 # ══════════════════════════════════════════════════════════
 
-class StatCard(Frame):
+class StatCard(QFrame):
     def __init__(self, parent, label, color=None, **kw):
+        super().__init__(parent)
         C, _, F_BIG, F_SMALL, *_ = _get_theme()
         if color is None:
             color = C["text"]
-        super().__init__(parent, bg=C["surface"], **kw)
-        self._val = Label(self, text="--", bg=C["surface"], fg=color,
-                          font=F_BIG, anchor=W)
-        self._val.pack(anchor=W, padx=14, pady=(10, 0))
-        self._lbl = Label(self, text=label, bg=C["surface"], fg=C["text2"],
-                          font=F_SMALL, anchor=W)
-        self._lbl.pack(anchor=W, padx=14, pady=(0, 10))
+
+        self.setStyleSheet(
+            f"StatCard {{ background-color: {C['surface']}; border-radius: 8px; }}"
+            f"QLabel {{ background: transparent; }}"
+        )
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(14, 10, 14, 10)
+        layout.setSpacing(2)
+
+        self._val = QLabel("--")
+        self._val.setStyleSheet(f"color: {color}; font-size: 20pt; font-weight: bold;")
+        self._lbl = QLabel(label)
+        self._lbl.setStyleSheet(f"color: {C['text2']}; font-size: 9pt;")
+
+        layout.addWidget(self._val)
+        layout.addWidget(self._lbl)
 
     def set_value(self, val):
-        self._val.config(text=val)
+        self._val.setText(str(val))
 
 
 # ══════════════════════════════════════════════════════════
@@ -111,7 +121,7 @@ class StatCard(Frame):
 # ══════════════════════════════════════════════════════════
 
 class ConfirmDialog:
-    """确认对话框（颜色由当前主题决定）"""
+    """确认对话框"""
 
     def __init__(self, parent, title, summary, items, confirm_text="Delete",
                  confirm_bg="#da3633", confirm_hover="#f85149"):
@@ -121,95 +131,111 @@ class ConfirmDialog:
             return
 
         C, F_BTN, _, F_SMALL, F_BODY, _ = _get_theme()
-        _cn = F_BTN[0]  # 当前字体名
 
-        self.result = False
-        self.win = Toplevel(parent)
-        self.win.title(title)
-        self.win.geometry("700x520")
-        self.win.minsize(500, 380)
-        self.win.configure(bg=C["bg"])
-        self.win.transient(parent)
-        try:
-            self.win.grab_set()
-        except Exception:
-            pass
+        dlg = QDialog(parent)
+        dlg.setWindowTitle(title)
+        dlg.resize(900, 600)
+        dlg.setMinimumSize(700, 450)
+        self.win = dlg
 
-        hdr = Frame(self.win, bg=C["surface"], padx=20, pady=14)
-        hdr.pack(fill=X)
-        Label(hdr, text=title, bg=C["surface"], fg=C["red"],
-              font=(_cn, 14, "bold")).pack(anchor=W)
-        Label(hdr, text=summary, bg=C["surface"], fg=C["text2"],
-              font=F_SMALL, justify=LEFT, wraplength=640).pack(anchor=W, pady=(6, 0))
+        layout = QVBoxLayout(dlg)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
 
-        list_frame = Frame(self.win, bg=C["bg"], padx=16, pady=8)
-        list_frame.pack(fill=BOTH, expand=True)
+        # Header
+        hdr = QFrame()
+        hdr.setStyleSheet(f"background-color: {C['surface']}; padding: 14px;")
+        hdr_layout = QVBoxLayout(hdr)
+        hdr_layout.setSpacing(6)
+        title_lbl = QLabel(title)
+        title_lbl.setStyleSheet(f"color: {C['red']}; font-size: 14pt; font-weight: bold;")
+        summary_lbl = QLabel(summary)
+        summary_lbl.setStyleSheet(f"color: {C['text2']}; font-size: 9pt;")
+        summary_lbl.setWordWrap(True)
+        hdr_layout.addWidget(title_lbl)
+        hdr_layout.addWidget(summary_lbl)
+        layout.addWidget(hdr)
 
-        cols = ("type", "path", "size")
-        tree = ttk.Treeview(list_frame, columns=cols, show='headings',
-                             style='Scan.Treeview')
-        tree.heading("type", text="Type")
-        tree.heading("path", text="Path")
-        tree.heading("size", text="Size")
-        tree.column("type", width=60, anchor='center', minwidth=50)
-        tree.column("path", width=440, minwidth=200)
-        tree.column("size", width=100, anchor=E, minwidth=70)
-
-        ysb = Scrollbar(list_frame, orient=VERTICAL, command=tree.yview)
-        tree.configure(yscrollcommand=ysb.set)
-        tree.pack(side=LEFT, fill=BOTH, expand=True)
-        ysb.pack(side=RIGHT, fill=Y)
-
+        # Table
+        table = QTableWidget()
+        table.setColumnCount(3)
+        table.setHorizontalHeaderLabels(["Type", "Path", "Size"])
+        table.horizontalHeader().setStretchLastSection(False)
+        table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Fixed)
+        table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
+        table.horizontalHeader().setSectionResizeMode(2, QHeaderView.Fixed)
+        table.setEditTriggers(QTableWidget.NoEditTriggers)
+        table.setSelectionBehavior(QTableWidget.SelectRows)
+        table.setStyleSheet(f"""
+            QTableWidget {{
+                background-color: {C['bg']};
+                alternate-background-color: {C['tree_row2']};
+                color: {C['text']};
+                gridline-color: {C['border']};
+                border: none;
+            }}
+            QHeaderView::section {{
+                background-color: {C['tree_head']};
+                color: {C['text2']};
+                padding: 6px 10px;
+                border: none;
+                border-bottom: 1px solid {C['border']};
+                font-weight: bold;
+            }}
+        """)
+        table.setRowCount(len(items))
+        path_items = []
         for i, (lbl, detail) in enumerate(items):
-            tag = 'odd' if i % 2 else 'even'
-            tree.insert('', END, values=(lbl, detail[0], detail[1]), tags=(tag,))
-        tree.tag_configure('odd', background=C["tree_row1"])
-        tree.tag_configure('even', background=C["tree_row2"])
+            path_text = str(detail[0])
+            type_item = QTableWidgetItem(lbl)
+            path_item = QTableWidgetItem(path_text)
+            path_item.setToolTip(path_text)
+            size_item = QTableWidgetItem(str(detail[1]))
+            table.setItem(i, 0, type_item)
+            table.setItem(i, 1, path_item)
+            table.setItem(i, 2, size_item)
+            path_items.append((i, path_text, path_item))
+        table.setColumnWidth(0, 70)
+        table.setColumnWidth(2, 130)
 
-        btn_bar = Frame(self.win, bg=C["surface"], padx=20, pady=14)
-        btn_bar.pack(fill=X, side=BOTTOM)
+        # Path 列省略显示（需在布局确定后计算）
+        table.resizeColumnsToContents()
+        fm = QFontMetrics(table.font())
+        col_width = table.columnWidth(1)
+        for i, path_text, path_item in path_items:
+            max_width = max(col_width - 20, 100)
+            elided = fm.elidedText(path_text, Qt.ElideMiddle, max_width)
+            path_item.setText(elided)
 
-        Label(btn_bar, text="This cannot be undone!",
-              bg=C["surface"], fg=C["text3"], font=F_SMALL).pack(side=LEFT)
+        layout.addWidget(table, stretch=1)
 
-        cancel_btn = RoundButton(btn_bar, text="Cancel",
-                                  command=self._on_cancel,
+        # Button bar
+        btn_bar = QFrame()
+        btn_bar.setStyleSheet(f"background-color: {C['surface']}; padding: 14px;")
+        btn_layout = QHBoxLayout(btn_bar)
+        warn_lbl = QLabel("This cannot be undone!")
+        warn_lbl.setStyleSheet(f"color: {C['text3']}; font-size: 9pt;")
+        btn_layout.addWidget(warn_lbl)
+        btn_layout.addStretch()
+
+        cancel_btn = RoundButton(btn_bar, "Cancel", lambda: dlg.reject(),
                                   bg=C["btn_bg"], fg=C["text"])
-        cancel_btn.pack(side=RIGHT, padx=(8, 0))
+        btn_layout.addWidget(cancel_btn)
 
-        confirm_btn = RoundButton(btn_bar, text=confirm_text,
-                                   command=self._on_confirm,
+        confirm_btn = RoundButton(btn_bar, confirm_text, lambda: dlg.accept(),
                                    bg=confirm_bg, fg="#ffffff",
                                    hover_bg=confirm_hover)
-        confirm_btn.pack(side=RIGHT)
+        btn_layout.addWidget(confirm_btn)
 
-        self.win.update_idletasks()
-        pw = parent.winfo_width()
-        ph = parent.winfo_height()
-        px = parent.winfo_x()
-        py = parent.winfo_y()
-        x = px + (pw - 700) // 2
-        y = py + (ph - 520) // 2
-        self.win.geometry(f"+{x}+{y}")
+        layout.addWidget(btn_bar)
 
-        self.win.bind('<Escape>', lambda e: self._on_cancel())
+        dlg.setStyleSheet(f"QDialog {{ background-color: {C['bg']}; }}")
 
-        try:
-            self.win.wait_window()
-        except Exception:
-            self.result = False
-
-    def _on_confirm(self):
-        self.result = True
-        self.win.destroy()
-
-    def _on_cancel(self):
-        self.result = False
-        self.win.destroy()
+        self.result = (dlg.exec_() == QDialog.Accepted)
 
 
 class InfoDialog:
-    """信息对话框（颜色由当前主题决定）"""
+    """信息对话框（支持结果统计和错误详情展示）"""
 
     def __init__(self, parent, title, message, msg_color=None):
         if _DIALOG_AUTO_DISMISS:
@@ -217,50 +243,163 @@ class InfoDialog:
             return
 
         C, F_BTN, _, F_SMALL, F_BODY, _ = _get_theme()
-        _cn = F_BTN[0]  # 当前字体名
 
-        self.win = Toplevel(parent)
-        self.win.title(title)
-        self.win.geometry("480x200")
-        self.win.configure(bg=C["bg"])
-        self.win.transient(parent)
-        try:
-            self.win.grab_set()
-        except Exception:
-            pass
+        dlg = QDialog(parent)
+        dlg.setWindowTitle(title)
+        dlg.resize(600, 400)
+        dlg.setMinimumSize(500, 350)
+        self.win = dlg
 
-        body = Frame(self.win, bg=C["bg"], padx=24, pady=20)
-        body.pack(fill=BOTH, expand=True)
+        # 解析消息
+        summary, details = self._parse_message(message)
 
-        Label(body, text=title, bg=C["bg"],
-              fg=msg_color or C["accent"],
-              font=(_cn, 13, "bold")).pack(anchor=W)
-        Label(body, text=message, bg=C["bg"], fg=C["text"],
-              font=F_BODY, justify=LEFT, wraplength=420).pack(anchor=W, pady=(10, 0))
+        layout = QVBoxLayout(dlg)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
 
-        btn_bar = Frame(self.win, bg=C["surface"], padx=20, pady=12)
-        btn_bar.pack(fill=X, side=BOTTOM)
-        ok_btn = RoundButton(btn_bar, text="OK", command=self._close,
-                              bg=C["accent"], fg="#ffffff", hover_bg="#79c0ff")
-        ok_btn.pack(side=RIGHT)
+        # 内容区域
+        content = QFrame()
+        content.setStyleSheet(f"background-color: {C['bg']};")
+        content_layout = QVBoxLayout(content)
+        content_layout.setContentsMargins(30, 24, 30, 20)
+        content_layout.setSpacing(16)
 
-        self.win.update_idletasks()
-        px = parent.winfo_x()
-        py = parent.winfo_y()
-        pw = parent.winfo_width()
-        ph = parent.winfo_height()
-        x = px + (pw - 480) // 2
-        y = py + (ph - 200) // 2
-        self.win.geometry(f"+{x}+{y}")
-        self.win.bind('<Escape>', lambda e: self._close())
-        self.win.bind('<Return>', lambda e: self._close())
-        try:
-            self.win.wait_window()
-        except Exception:
-            pass
+        # 图标 + 标题
+        icon_map = {
+            "Done": ("\u2713", C["green"]),
+            "Partial Failure": ("\u26A0", C["orange"]),
+        }
+        icon_char, icon_color = icon_map.get(title, ("\u2139", msg_color or C["accent"]))
 
-    def _close(self):
-        self.win.destroy()
+        title_frame = QFrame()
+        title_layout = QHBoxLayout(title_frame)
+        title_layout.setContentsMargins(0, 0, 0, 0)
+        title_layout.setSpacing(12)
+
+        icon_lbl = QLabel(icon_char)
+        icon_lbl.setStyleSheet(
+            f"color: {icon_color}; font-size: 28pt; font-weight: bold;")
+        icon_lbl.setAlignment(Qt.AlignCenter)
+        icon_lbl.setMinimumWidth(40)
+
+        title_text = QLabel(title)
+        title_text.setStyleSheet(
+            f"color: {icon_color}; font-size: 16pt; font-weight: bold;")
+
+        title_layout.addWidget(icon_lbl)
+        title_layout.addWidget(title_text)
+        title_layout.addStretch()
+        content_layout.addWidget(title_frame)
+
+        # 统计卡片区域
+        if summary:
+            cards_frame = QFrame()
+            cards_frame.setStyleSheet("background: transparent;")
+            cards_layout = QHBoxLayout(cards_frame)
+            cards_layout.setContentsMargins(0, 0, 0, 0)
+            cards_layout.setSpacing(12)
+
+            for stat in summary:
+                card = self._create_stat_card(
+                    cards_frame, stat["label"], stat["value"],
+                    stat.get("color", C["text"]))
+                cards_layout.addWidget(card)
+
+            cards_layout.addStretch()
+            content_layout.addWidget(cards_frame)
+
+        # 错误详情
+        if details:
+            details_label = QLabel("Error Details:")
+            details_label.setStyleSheet(
+                f"color: {C['text2']}; font-size: 10pt; font-weight: bold;")
+            content_layout.addWidget(details_label)
+
+            text_edit = QTextEdit()
+            text_edit.setReadOnly(True)
+            text_edit.setPlainText(details)
+            text_edit.setStyleSheet(f"""
+                QTextEdit {{
+                    background-color: {C['surface']};
+                    color: {C['text']};
+                    border: 1px solid {C['border']};
+                    border-radius: 6px;
+                    padding: 8px;
+                    font-family: Consolas, monospace;
+                    font-size: 9pt;
+                }}
+            """)
+            content_layout.addWidget(text_edit, stretch=1)
+
+        content_layout.addStretch()
+        layout.addWidget(content, stretch=1)
+
+        # 按钮栏
+        btn_bar = QFrame()
+        btn_bar.setStyleSheet(
+            f"background-color: {C['surface']}; padding: 14px;")
+        btn_layout = QHBoxLayout(btn_bar)
+        btn_layout.addStretch()
+        ok_btn = RoundButton(
+            btn_bar, "OK", lambda: dlg.accept(),
+            bg=C["accent"], fg="#ffffff", hover_bg="#79c0ff")
+        btn_layout.addWidget(ok_btn)
+        layout.addWidget(btn_bar)
+
+        dlg.setStyleSheet(f"QDialog {{ background-color: {C['bg']}; }}")
+        dlg.exec_()
+
+    def _parse_message(self, message):
+        """解析 message，返回 (summary_list, details_str)"""
+        parts = message.split("\n\n", 1)
+        summary_text = parts[0].strip()
+        details = parts[1] if len(parts) > 1 else None
+
+        C, _ = _get_theme()[:2] if _get_theme() else ({}, None)
+
+        summary = []
+        import re
+        for match in re.finditer(r'(\w+):\s*([^\s,]+)', summary_text):
+            label, value = match.group(1), match.group(2)
+            if "Deleted" in label:
+                color = C.get("green", "#107c10")
+            elif "Failed" in label:
+                color = C.get("red", "#d13438")
+            elif "Blocked" in label:
+                color = C.get("orange", "#ca5010")
+            else:
+                color = C.get("text", "#1a1a1a")
+            summary.append({"label": label, "value": value, "color": color})
+
+        return summary, details
+
+    def _create_stat_card(self, parent, label, value, color):
+        """创建统计卡片"""
+        C = _get_theme()[0]
+        card = QFrame(parent)
+        card.setStyleSheet(f"""
+            QFrame {{
+                background-color: {C['surface']};
+                border-radius: 8px;
+                border: 1px solid {C['border']};
+            }}
+        """)
+        layout = QVBoxLayout(card)
+        layout.setContentsMargins(16, 12, 16, 12)
+        layout.setSpacing(4)
+
+        val_lbl = QLabel(value)
+        val_lbl.setStyleSheet(
+            f"color: {color}; font-size: 20pt; font-weight: bold;")
+        val_lbl.setAlignment(Qt.AlignCenter)
+
+        lbl = QLabel(label)
+        lbl.setStyleSheet(f"color: {C['text2']}; font-size: 9pt;")
+        lbl.setAlignment(Qt.AlignCenter)
+
+        layout.addWidget(val_lbl)
+        layout.addWidget(lbl)
+        return card
 
 
 # ══════════════════════════════════════════════════════════

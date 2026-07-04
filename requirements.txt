@@ -1,0 +1,2 @@
+# DiskScanner PyQt5 Dependencies
+PyQt5>=5.15.0
