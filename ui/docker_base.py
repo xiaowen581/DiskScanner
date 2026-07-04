@@ -136,8 +136,8 @@ class DockerTabBase(Frame):
         self.tree.insert('', END, iid=iid, values=values, tags=(tag,))
         self.tree.tag_configure('odd', background=C["tree_row1"])
         self.tree.tag_configure('even', background=C["tree_row2"])
-        self.tree.tag_configure('odd_checked', background="#1a2a40")
-        self.tree.tag_configure('even_checked', background="#162538")
+        self.tree.tag_configure('odd_checked', background=C["checked_odd"])
+        self.tree.tag_configure('even_checked', background=C["checked_even"])
 
     def _show_result(self, title, results):
         ok = sum(1 for r in results if r.success)

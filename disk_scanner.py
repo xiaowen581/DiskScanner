@@ -19,6 +19,20 @@ from datetime import datetime
 
 
 # ─────────────────────────────────────────────
+# Windows 终端兼容性处理
+# ─────────────────────────────────────────────
+
+if sys.platform == 'win32':
+    # 1. 启用 Windows 虚拟终端序列（ANSI 颜色支持）
+    os.system('')
+    # 2. 确保 stdout 使用 UTF-8 编码，避免中文乱码
+    try:
+        sys.stdout.reconfigure(encoding='utf-8')
+    except AttributeError:
+        pass  # Python < 3.7 没有 reconfigure
+
+
+# ─────────────────────────────────────────────
 # 终端颜色 (ANSI)
 # ─────────────────────────────────────────────
 

@@ -21,6 +21,7 @@ from ui.docker_frame import DockerFrame
 
 
 import ui.theme as _theme
+import ui._base as _base
 
 
 class DiskScannerApp:
@@ -109,9 +110,9 @@ class ScannerApp:
 
 
 def __getattr__(name):
-    """模块级属性代理 — 将 _DIALOG_AUTO_DISMISS 等转发到 ui.theme"""
+    """模块级属性代理 — 将 _DIALOG_AUTO_DISMISS 等转发到 ui._base"""
     if name == '_DIALOG_AUTO_DISMISS':
-        return _theme._DIALOG_AUTO_DISMISS
+        return _base._DIALOG_AUTO_DISMISS
     raise AttributeError(f"module 'tkinter_gui' has no attribute {name!r}")
 
 
@@ -127,13 +128,13 @@ _orig_module = sys.modules[__name__]
 class _ModuleProxy(_types.ModuleType):
     def __setattr__(self, name, value):
         if name == '_DIALOG_AUTO_DISMISS':
-            _theme._DIALOG_AUTO_DISMISS = value
+            _base._DIALOG_AUTO_DISMISS = value
         else:
             super().__setattr__(name, value)
 
     def __getattr__(self, name):
         if name == '_DIALOG_AUTO_DISMISS':
-            return _theme._DIALOG_AUTO_DISMISS
+            return _base._DIALOG_AUTO_DISMISS
         raise AttributeError(f"module 'tkinter_gui' has no attribute {name!r}")
 
 
