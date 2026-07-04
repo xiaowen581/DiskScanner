@@ -316,7 +316,7 @@ python disk_scanner.py /home/user --no-interactive
 FD/
 ├── design.md              # 本设计文档
 ├── disk_scanner.py        # 扫描核心引擎（CLI 主程序）
-├── gui.py                 # Web GUI 服务器（后端 API）
+├── web_gui.py             # Web GUI 服务器（不再维护）
 ├── index.html             # Web GUI 前端界面
 └── tkinter_gui.py         # 原生桌面 GUI（tkinter）
 ```
@@ -338,7 +338,7 @@ FD/
 
 ---
 
-## 12. Web GUI 界面设计
+## 12. Web GUI 界面设计（不再维护）
 
 ### 12.1 概述
 
@@ -347,8 +347,8 @@ FD/
 ### 12.2 启动方式
 
 ```bash
-python3 gui.py          # 默认端口 8888
-python3 gui.py 9000     # 自定义端口
+python3 web_gui.py          # 默认端口 8888
+python3 web_gui.py 9000     # 自定义端口
 ```
 
 启动后自动打开浏览器，访问 `http://127.0.0.1:8888`。
