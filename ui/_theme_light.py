@@ -2,35 +2,16 @@
 # -*- coding: utf-8 -*-
 """
 _theme_light.py — Windows 浅色主题 (Fluent Design / 原生 Windows 风格)
+PyQt5 版本 — 仅提供颜色字典和字体常量，QSS 由 theme.py 统一生成
 """
 
 import platform
-from tkinter import ttk
 
-# ── 字体检测 (Windows) ──
 
-def detect_font_windows():
-    """Windows 字体检测 — 优先 Microsoft YaHei，回退 Segoe UI"""
-    try:
-        import tkinter as _tk
-        import tkinter.font as tkfont
-        # 需要临时创建 Tk 实例才能获取字体列表
-        _tmp_root = _tk.Tk()
-        _tmp_root.withdraw()
-        available = tkfont.families()
-        _tmp_root.destroy()
-        for name in ("Microsoft YaHei UI", "Microsoft YaHei", "SimHei", "Segoe UI"):
-            if name in available:
-                return name
-        # 部分匹配
-        for name in ("Microsoft YaHei", "SimHei"):
-            if any(name in f for f in available):
-                return name
-    except Exception:
-        pass
-    return "Segoe UI"
-
-_CN = detect_font_windows()
+# ── 字体 (Windows) ──
+# Windows 上直接使用 Microsoft YaHei UI，无需 QFontDatabase 检测
+# （QFontDatabase 需要 QGuiApplication 先创建，不能在模块导入时调用）
+_CN = "Microsoft YaHei UI"
 
 
 # ── 调色板 — Windows 浅色 (Fluent Design) ──
@@ -75,63 +56,3 @@ F_BIG   = (_CN, 20, "bold")
 F_STAT  = (_CN, 13, "bold")
 F_MONO  = ("Consolas", 10)
 F_BTN   = (_CN, 9, "bold")
-
-
-# ══════════════════════════════════════════════════════════
-#  ttk 样式初始化
-# ══════════════════════════════════════════════════════════
-
-def setup_styles(style):
-    """配置所有 ttk 样式（浅色版）"""
-    s = style
-    c = C
-
-    # Scanner Treeview
-    s.configure('Scan.Treeview',
-                 background=c["tree_bg"], foreground=c["text"],
-                 fieldbackground=c["tree_bg"], font=F_BODY,
-                 rowheight=28, borderwidth=0)
-    s.configure('Scan.Treeview.Heading',
-                 background=c["tree_head"], foreground=c["text2"],
-                 font=F_BTN, relief='flat', padding=(8, 5))
-    s.map('Scan.Treeview',
-          background=[('selected', c["tree_sel"])],
-          foreground=[('selected', c["accent"])])
-
-    # Docker Treeview
-    s.configure('Docker.Treeview',
-                 background=c["tree_bg"], foreground=c["text"],
-                 fieldbackground=c["tree_bg"], font=F_BODY,
-                 rowheight=28, borderwidth=0)
-    s.configure('Docker.Treeview.Heading',
-                 background=c["tree_head"], foreground=c["text2"],
-                 font=F_BTN, relief='flat', padding=(8, 5))
-    s.map('Docker.Treeview',
-          background=[('selected', c["tree_sel"])],
-          foreground=[('selected', c["accent"])])
-
-    # Progressbar
-    s.configure('Scan.Horizontal.TProgressbar',
-                 troughcolor=c["surface"], background=c["accent"],
-                 borderwidth=0, thickness=4)
-
-    # Separator
-    s.configure('Dark.TSeparator', background=c["border"])
-
-    # Notebook (主标签页)
-    s.configure('Dark.TNotebook', background=c["bg"], borderwidth=0)
-    s.configure('Dark.TNotebook.Tab',
-                 background=c["surface"], foreground=c["text2"],
-                 padding=[16, 8], font=F_BTN)
-    s.map('Dark.TNotebook.Tab',
-          background=[('selected', c["bg"])],
-          foreground=[('selected', c["accent"])])
-
-    # Sub-Notebook (Docker 子标签页)
-    s.configure('Sub.TNotebook', background=c["bg"], borderwidth=0)
-    s.configure('Sub.TNotebook.Tab',
-                 background=c["surface2"], foreground=c["text2"],
-                 padding=[12, 6], font=F_SMALL)
-    s.map('Sub.TNotebook.Tab',
-          background=[('selected', c["bg"])],
-          foreground=[('selected', c["cyan"])])

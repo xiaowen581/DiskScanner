@@ -1,22 +1,22 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-docker_frame.py — Docker 父标签页
-包含子 Notebook，下分 Images / Containers / Volumes 三个子标签页
+docker_frame.py — Docker 父标签页 (PyQt5 版本)
+包含子 QTabWidget，下分 Images / Containers / Volumes 三个子标签页
 """
 
-from tkinter import ttk, Frame, BOTH
-from ui.theme import C, setup_styles
+from PyQt5.QtWidgets import QWidget, QVBoxLayout, QTabWidget
+from ui.theme import C
 from ui.docker_images import DockerImagesFrame
 from ui.docker_containers import DockerContainersFrame
 from ui.docker_volumes import DockerVolumesFrame
 
 
-class DockerFrame(Frame):
-    """Docker 管理父标签页 — 内含子 Notebook (Images / Containers / Volumes)"""
+class DockerFrame(QWidget):
+    """Docker 管理父标签页 — 内含子 QTabWidget (Images / Containers / Volumes)"""
 
     def __init__(self, parent, app):
-        super().__init__(parent, bg=C["bg"])
+        super().__init__(parent)
         self.app = app
         self.root = app
 
@@ -24,28 +24,31 @@ class DockerFrame(Frame):
         self._build()
 
     def _build(self):
-        # 子 Notebook
-        self.notebook = ttk.Notebook(self, style='Sub.TNotebook')
-        self.notebook.pack(fill=BOTH, expand=True, padx=8, pady=8)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(8, 8, 8, 8)
+
+        # 子 QTabWidget
+        self.notebook = QTabWidget()
+        self.notebook.setObjectName("dockerTabs")
+        layout.addWidget(self.notebook)
 
         # Sub-tab 1: Images
         self.images_frame = DockerImagesFrame(self.notebook, self.app)
-        self.notebook.add(self.images_frame, text="  Images  ")
+        self.notebook.addTab(self.images_frame, "  Images  ")
 
         # Sub-tab 2: Containers
         self.containers_frame = DockerContainersFrame(self.notebook, self.app)
-        self.notebook.add(self.containers_frame, text="  Containers  ")
+        self.notebook.addTab(self.containers_frame, "  Containers  ")
 
         # Sub-tab 3: Volumes
         self.volumes_frame = DockerVolumesFrame(self.notebook, self.app)
-        self.notebook.add(self.volumes_frame, text="  Volumes  ")
+        self.notebook.addTab(self.volumes_frame, "  Volumes  ")
 
         # Lazy-load sub-tabs
-        self.notebook.bind('<<NotebookTabChanged>>', self._on_tab_changed)
+        self.notebook.currentChanged.connect(self._on_tab_changed)
 
-    def _on_tab_changed(self, event):
+    def _on_tab_changed(self, idx):
         """首次切换到子标签页时自动加载数据"""
-        idx = self.notebook.index(self.notebook.select())
         if idx == 0 and not self._loaded["images"]:
             self.images_frame.load()
             self._loaded["images"] = True

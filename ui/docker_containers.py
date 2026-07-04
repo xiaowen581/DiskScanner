@@ -1,52 +1,62 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-docker_containers.py — Docker Containers 子标签页
+docker_containers.py — Docker Containers 子标签页 (PyQt5 版本)
 """
 
-from tkinter import Label, E, W
+from PyQt5.QtWidgets import QLabel, QHBoxLayout, QApplication
+from PyQt5.QtCore import Qt
 from ui.docker_base import DockerTabBase
-from ui.theme import C, F_SMALL, ConfirmDialog, InfoDialog
+from ui.theme import C, F_SMALL, make_font, ConfirmDialog, InfoDialog
 from docker_manager import DockerManager
 
 
 class DockerContainersFrame(DockerTabBase):
 
-    def _build_toolbar(self, parent):
-        self._make_btn(parent, "REFRESH", self.load, padx=8).pack(side="left", padx=(0, 4))
-        self._make_btn(parent, "CHECK ALL", self._check_all, padx=8).pack(side="left", padx=(0, 4))
-        self._make_btn(parent, "CLEAR", self._clear_checks, padx=8).pack(side="left", padx=(0, 4))
-        self._make_btn(parent, "STOP SELECTED", self._stop_selected,
-                        bg=C["orange"], fg="#ffffff", hover_bg="#e6b800",
-                        padx=12).pack(side="left", padx=(0, 4))
-        self._make_btn(parent, "DELETE SELECTED", self._delete_selected,
-                        bg="#da3633", fg="#ffffff", hover_bg="#f85149",
-                        padx=12).pack(side="left", padx=(0, 4))
-        self.count_label = Label(parent, text="", bg=C["bg"], fg=C["text2"], font=F_SMALL)
-        self.count_label.pack(side="right")
+    def _build_toolbar(self, layout):
+        btn1 = self._make_btn(None, "REFRESH", self.load, padx=8)
+        layout.addWidget(btn1)
+        btn2 = self._make_btn(None, "CHECK ALL", self._check_all, padx=8)
+        layout.addWidget(btn2)
+        btn3 = self._make_btn(None, "CLEAR", self._clear_checks, padx=8)
+        layout.addWidget(btn3)
+        btn4 = self._make_btn(None, "STOP SELECTED", self._stop_selected,
+                               bg=C["orange"], fg="#ffffff", hover_bg="#e6b800",
+                               padx=12)
+        layout.addWidget(btn4)
+        btn5 = self._make_btn(None, "DELETE SELECTED", self._delete_selected,
+                               bg="#da3633", fg="#ffffff", hover_bg="#f85149",
+                               padx=12)
+        layout.addWidget(btn5)
+        layout.addStretch()
+        self.count_label = QLabel("")
+        self.count_label.setFont(make_font(F_SMALL))
+        self.count_label.setStyleSheet(f"color: {C['text2']};")
+        layout.addWidget(self.count_label)
 
     def load(self):
-        self.status_var.set("Loading containers...")
-        self.root.update_idletasks()
+        self.status_label.setText("Loading containers...")
+        QApplication.processEvents()
         try:
             self.containers = DockerManager.list_containers(all_states=True)
         except Exception as e:
             self.containers = []
-            self.status_var.set(f"Error: {e}")
+            self.status_label.setText(f"Error: {e}")
             return
         self._reload_rows()
-        self.status_var.set(f"Loaded {len(self.containers)} container(s)")
+        self.status_label.setText(f"Loaded {len(self.containers)} container(s)")
 
     def _reload_rows(self):
         self._clear_tree()
-        cols = ("check", "name", "image", "id", "state", "status", "ports", "created")
+        cols = ["check", "name", "image", "id", "state", "status", "ports", "created"]
         widths = {"check": 40, "name": 180, "image": 200, "id": 110,
                   "state": 90, "status": 160, "ports": 200, "created": 160}
-        anchors = {"check": 'center', "state": 'center', "id": 'center'}
+        alignments = {"check": Qt.AlignCenter, "state": Qt.AlignCenter}
         headings = {"check": "", "name": "Name", "image": "Image", "id": "Container ID",
                     "state": "State", "status": "Status", "ports": "Ports", "created": "Created"}
-        self._setup_columns(cols, widths, anchors, headings)
+        self._setup_columns(cols, widths, alignments, headings)
 
+        self.tree.setRowCount(len(self.containers))
         for i, ctr in enumerate(self.containers):
             iid = str(i)
             self.item_map[iid] = ctr
@@ -60,8 +70,8 @@ class DockerContainersFrame(DockerTabBase):
     def _update_check_count(self):
         n = len(self._checked)
         total = len(self.containers)
-        self.count_label.config(
-            text=f"Containers: {total}  |  Selected: {n}" if n else f"Containers: {total}")
+        self.count_label.setText(
+            f"Containers: {total}  |  Selected: {n}" if n else f"Containers: {total}")
 
     def _stop_selected(self):
         if not self._checked:

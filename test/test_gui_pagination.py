@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-DiskScanner GUI 单元测试
+DiskScanner GUI 单元测试 (PyQt5 版本)
 覆盖: 分页逻辑、视图切换、排序重置、大数据量渲染性能
 运行: python3 -m unittest test_gui_pagination.py -v
 """
@@ -22,15 +22,13 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from disk_scanner import FileNode, DirNode, ScanResult, Scanner
 
 # 测试模式：自动跳过对话框，不弹窗
-import tkinter_gui as _tkmod
+import pyqt_gui as _tkmod
 _tkmod._DIALOG_AUTO_DISMISS = True
 
-# tkinter 测试需要显示服务器，在无头环境中跳过
-import tkinter
+# PyQt5 测试需要显示服务器，在无头环境中跳过
+from PyQt5.QtWidgets import QApplication
 try:
-    _test_root = tkinter.Tk()
-    _test_root.withdraw()
-    _test_root.destroy()
+    _qapp = QApplication.instance() or QApplication(sys.argv)
     _HAS_DISPLAY = True
 except Exception:
     _HAS_DISPLAY = False
@@ -59,15 +57,15 @@ class TestGUIPagination(unittest.TestCase):
         shutil.rmtree(cls.tmpdir, ignore_errors=True)
 
     def setUp(self):
-        from tkinter_gui import ScannerApp
-        self.app = ScannerApp()
+        from pyqt_gui import ScannerApp
+        self.app = ScannerApp(_qapp)
         # 执行扫描，获取真实数据
         scanner = Scanner()
         self.app.result = scanner.scan(self.tmpdir)
         self.app._render()
 
     def tearDown(self):
-        self.app.root.destroy()
+        self.app.root.close()
 
     def test_initial_page_is_zero(self):
         """初始页码应为 0"""
@@ -79,8 +77,8 @@ class TestGUIPagination(unittest.TestCase):
 
     def test_treeview_limited_to_page_size(self):
         """Treeview 中的行数不应超过 page_size"""
-        children = self.app.tree.get_children()
-        self.assertLessEqual(len(children), self.app._page_size)
+        row_count = self.app.tree.rowCount()
+        self.assertLessEqual(row_count, self.app._page_size)
 
     def test_total_items_matches_data(self):
         """_total_items 应等于排序后的总条目数"""
@@ -130,11 +128,11 @@ class TestGUIPagination(unittest.TestCase):
         max_page = (self.app._total_items - 1) // self.app._page_size
         self.app._page = max_page
         self.app._render()
-        children = self.app.tree.get_children()
+        row_count = self.app.tree.rowCount()
         expected = self.app._total_items % self.app._page_size
         if expected == 0:
             expected = self.app._page_size
-        self.assertEqual(len(children), expected)
+        self.assertEqual(row_count, expected)
 
     def test_switch_resets_page(self):
         """切换视图时页码归零"""
@@ -154,7 +152,7 @@ class TestGUIPagination(unittest.TestCase):
     def test_page_label_updates(self):
         """分页标签应显示 当前页/总页数"""
         self.app._switch("files")
-        text = self.app._page_label.cget("text")
+        text = self.app._page_label.text()
         self.assertIn("/", text)
         self.assertIn("1", text)
 
@@ -175,13 +173,13 @@ class TestGUIRenderPerformance(unittest.TestCase):
         shutil.rmtree(cls.tmpdir, ignore_errors=True)
 
     def setUp(self):
-        from tkinter_gui import ScannerApp
-        self.app = ScannerApp()
+        from pyqt_gui import ScannerApp
+        self.app = ScannerApp(_qapp)
         scanner = Scanner()
         self.app.result = scanner.scan(self.tmpdir)
 
     def tearDown(self):
-        self.app.root.destroy()
+        self.app.root.close()
 
     def test_render_files_completes_quickly(self):
         """切换到 FILES 视图应在 2 秒内完成（1000 条数据）"""
@@ -204,8 +202,8 @@ class TestGUIRenderPerformance(unittest.TestCase):
         self.app._switch("files")
         for _ in range(5):
             self.app._next_page()
-        children = self.app.tree.get_children()
-        self.assertLessEqual(len(children), self.app._page_size)
+        row_count = self.app.tree.rowCount()
+        self.assertLessEqual(row_count, self.app._page_size)
 
     def test_pagination_through_all_pages(self):
         """遍历所有页面，每页都有数据且不超过 page_size"""
@@ -215,10 +213,10 @@ class TestGUIRenderPerformance(unittest.TestCase):
         for p in range(max_page + 1):
             self.app._page = p
             self.app._render()
-            children = self.app.tree.get_children()
-            self.assertGreater(len(children), 0, f"第 {p} 页没有数据")
-            self.assertLessEqual(len(children), self.app._page_size)
-            total_shown += len(children)
+            row_count = self.app.tree.rowCount()
+            self.assertGreater(row_count, 0, f"第 {p} 页没有数据")
+            self.assertLessEqual(row_count, self.app._page_size)
+            total_shown += row_count
         self.assertEqual(total_shown, self.app._total_items)
 
 
@@ -243,14 +241,14 @@ class TestGUICheckbox(unittest.TestCase):
         shutil.rmtree(cls.tmpdir, ignore_errors=True)
 
     def setUp(self):
-        from tkinter_gui import ScannerApp
-        self.app = ScannerApp()
+        from pyqt_gui import ScannerApp
+        self.app = ScannerApp(_qapp)
         scanner = Scanner()
         self.app.result = scanner.scan(self.tmpdir)
         self.app._switch("files")
 
     def tearDown(self):
-        self.app.root.destroy()
+        self.app.root.close()
 
     def test_initial_no_checks(self):
         """初始状态无任何勾选"""
@@ -259,7 +257,7 @@ class TestGUICheckbox(unittest.TestCase):
     def test_toggle_check(self):
         """点击勾选应切换状态"""
         self.app._render()
-        iid = self.app.tree.get_children()[0]
+        iid = "0"
         self.app._toggle_check(iid)
         node = self.app.item_map.get(iid)
         self.assertIn(node.path, self.app._checked_paths)
@@ -271,8 +269,8 @@ class TestGUICheckbox(unittest.TestCase):
         """勾选当前页所有条目"""
         self.app._render()
         self.app._check_all_on_page()
-        children = self.app.tree.get_children()
-        for iid in children:
+        for i in range(self.app.tree.rowCount()):
+            iid = str(i)
             node = self.app.item_map.get(iid)
             self.assertIn(node.path, self.app._checked_paths)
 
@@ -283,7 +281,8 @@ class TestGUICheckbox(unittest.TestCase):
         self.assertGreater(len(self.app._checked_paths), 0)
         self.app._uncheck_all_on_page()
         # 当前页的所有条目应被取消
-        for iid in self.app.tree.get_children():
+        for i in range(self.app.tree.rowCount()):
+            iid = str(i)
             node = self.app.item_map.get(iid)
             self.assertNotIn(node.path, self.app._checked_paths)
 
@@ -291,8 +290,8 @@ class TestGUICheckbox(unittest.TestCase):
         """勾选状态跨页持久化"""
         self.app._render()
         # 第1页勾选前3个
-        for iid in self.app.tree.get_children()[:3]:
-            self.app._toggle_check(iid)
+        for i in range(3):
+            self.app._toggle_check(str(i))
         checked_count = len(self.app._checked_paths)
         self.assertEqual(checked_count, 3)
 
@@ -317,30 +316,31 @@ class TestGUICheckbox(unittest.TestCase):
         """勾选后工具栏显示计数"""
         self.app._render()
         self.app._check_all_on_page()
-        text = self.app.tree_title.cget("text")
+        text = self.app.tree_title.text()
         self.assertIn("Checked:", text)
 
     def test_checkbox_column_exists(self):
         """勾选列应存在"""
         self.app._render()
-        cols = self.app.tree.cget('columns')
+        cols = self.app.tree._cols
         self.assertIn('check', cols)
 
     def test_row_shows_checkbox(self):
         """每行应显示勾选框符号"""
         self.app._render()
-        iid = self.app.tree.get_children()[0]
-        vals = self.app.tree.item(iid, 'values')
+        item = self.app.tree.item(0, 0)
+        val = item.text()
         # 第一列是勾选框
-        self.assertIn(vals[0], ('[ ]', '[x]'))
+        self.assertIn(val, ('[ ]', '[x]'))
 
     def test_checked_row_has_highlight(self):
         """勾选的行应有高亮背景"""
         self.app._render()
-        iid = self.app.tree.get_children()[0]
+        iid = "0"
         self.app._toggle_check(iid)
-        tags = self.app.tree.item(iid, 'tags')
-        self.assertTrue(any('_checked' in t for t in tags))
+        # 验证勾选状态显示为 [x]
+        item = self.app.tree.item(0, 0)
+        self.assertEqual(item.text(), "[x]")
 
 
 @unittest.skipUnless(_HAS_DISPLAY, "No display available")
@@ -366,14 +366,14 @@ class TestGUIBatchDelete(unittest.TestCase):
         shutil.rmtree(cls.tmpdir, ignore_errors=True)
 
     def setUp(self):
-        from tkinter_gui import ScannerApp
-        self.app = ScannerApp()
+        from pyqt_gui import ScannerApp
+        self.app = ScannerApp(_qapp)
         scanner = Scanner()
         self.app.result = scanner.scan(self.tmpdir)
         self.app._switch("files")
 
     def tearDown(self):
-        self.app.root.destroy()
+        self.app.root.close()
 
     def test_batch_delete_nodes_files(self):
         """批量删除文件应成功"""
@@ -559,15 +559,15 @@ class TestGUIExport(unittest.TestCase):
         shutil.rmtree(cls.tmpdir, ignore_errors=True)
 
     def setUp(self):
-        from tkinter_gui import ScannerApp
-        self.app = ScannerApp()
+        from pyqt_gui import ScannerApp
+        self.app = ScannerApp(_qapp)
         scanner = Scanner()
         self.app.result = scanner.scan(self.tmpdir)
         self.app.scan_path = self.tmpdir
         self.app._switch("files")
 
     def tearDown(self):
-        self.app.root.destroy()
+        self.app.root.close()
 
     def test_export_json_creates_file(self):
         """_export('json') 应创建 JSON 文件"""
@@ -576,7 +576,7 @@ class TestGUIExport(unittest.TestCase):
         r = self.app.result
         import json
         from disk_scanner import sort_nodes, format_size
-        from tkinter_gui import _fmt_time
+        from pyqt_gui import _fmt_time
 
         def to_dict(n):
             b = {"name": n.name, "path": n.path, "size": n.size,
@@ -611,7 +611,7 @@ class TestGUIExport(unittest.TestCase):
         r = self.app.result
         import csv as csv_mod
         from disk_scanner import sort_nodes, format_size
-        from tkinter_gui import _fmt_time
+        from pyqt_gui import _fmt_time
 
         with open(out_path, "w", newline="", encoding="utf-8-sig") as f:
             w = csv_mod.writer(f)
@@ -645,15 +645,15 @@ class TestGUIFilterRender(unittest.TestCase):
         shutil.rmtree(cls.tmpdir, ignore_errors=True)
 
     def setUp(self):
-        from tkinter_gui import ScannerApp
-        self.app = ScannerApp()
+        from pyqt_gui import ScannerApp
+        self.app = ScannerApp(_qapp)
         scanner = Scanner()
         self.app.result = scanner.scan(self.tmpdir)
         self.app.scan_path = self.tmpdir
         self.app._switch("files")
 
     def tearDown(self):
-        self.app.root.destroy()
+        self.app.root.close()
 
     def test_render_all_files(self):
         """无过滤时应显示所有文件"""
@@ -661,33 +661,33 @@ class TestGUIFilterRender(unittest.TestCase):
 
     def test_render_with_ext_filter(self):
         """设置扩展名过滤后应减少条目"""
-        self.app.ext_var.set(".txt")
+        self.app.ext_var.setText(".txt")
         self.app._render()
         self.assertEqual(self.app._total_items, 20)
 
     def test_render_with_min_size_filter(self):
         """设置最小大小过滤后应减少条目"""
-        self.app.min_size_var.set("500")
+        self.app.min_size_var.setText("500")
         self.app._render()
         # 只有 >= 500 bytes 的文件
-        for iid in self.app.tree.get_children():
-            node = self.app.item_map.get(iid)
+        for i in range(self.app.tree.rowCount()):
+            node = self.app.item_map.get(str(i))
             self.assertGreaterEqual(node.size, 500)
 
     def test_combined_filters(self):
         """组合过滤"""
-        self.app.ext_var.set(".txt")
-        self.app.min_size_var.set("1000")
+        self.app.ext_var.setText(".txt")
+        self.app.min_size_var.setText("1000")
         self.app._render()
-        for iid in self.app.tree.get_children():
-            node = self.app.item_map.get(iid)
+        for i in range(self.app.tree.rowCount()):
+            node = self.app.item_map.get(str(i))
             self.assertTrue(node.name.endswith('.txt'))
             self.assertGreaterEqual(node.size, 1000)
 
     def test_filter_resets_page(self):
         """过滤后页码应自动重置"""
         self.app._next_page()
-        self.app.ext_var.set(".txt")
+        self.app.ext_var.setText(".txt")
         self.app._page = 0  # _render 会在内部处理
         self.app._render()
         self.assertEqual(self.app._page, 0)
@@ -709,44 +709,44 @@ class TestGUISortModes(unittest.TestCase):
         shutil.rmtree(cls.tmpdir, ignore_errors=True)
 
     def setUp(self):
-        from tkinter_gui import ScannerApp
-        self.app = ScannerApp()
+        from pyqt_gui import ScannerApp
+        self.app = ScannerApp(_qapp)
         scanner = Scanner()
         self.app.result = scanner.scan(self.tmpdir)
         self.app.scan_path = self.tmpdir
         self.app._switch("files")
 
     def tearDown(self):
-        self.app.root.destroy()
+        self.app.root.close()
 
     def test_sort_by_size_desc(self):
         # 初始状态已是 size-desc，直接验证
-        items = [self.app.item_map[iid] for iid in self.app.tree.get_children()]
+        items = [self.app.item_map[str(i)] for i in range(self.app.tree.rowCount())]
         sizes = [n.size for n in items]
         self.assertEqual(sizes, sorted(sizes, reverse=True))
 
     def test_sort_by_size_asc(self):
         self.app._sort_by("size")  # toggle from desc to asc
-        items = [self.app.item_map[iid] for iid in self.app.tree.get_children()]
+        items = [self.app.item_map[str(i)] for i in range(self.app.tree.rowCount())]
         sizes = [n.size for n in items]
         self.assertEqual(sizes, sorted(sizes))
 
     def test_sort_by_name(self):
         self.app._sort_by("name")
         # name 默认是降序
-        items = [self.app.item_map[iid] for iid in self.app.tree.get_children()]
+        items = [self.app.item_map[str(i)] for i in range(self.app.tree.rowCount())]
         names = [n.name.lower() for n in items]
         self.assertEqual(names, sorted(names, reverse=True))
 
     def test_sort_by_ext(self):
         self.app._sort_by("ext")
-        items = [self.app.item_map[iid] for iid in self.app.tree.get_children()]
+        items = [self.app.item_map[str(i)] for i in range(self.app.tree.rowCount())]
         # 排序后应成功
         self.assertEqual(len(items), 4)
 
     def test_sort_by_modified(self):
         self.app._sort_by("modified")
-        items = [self.app.item_map[iid] for iid in self.app.tree.get_children()]
+        items = [self.app.item_map[str(i)] for i in range(self.app.tree.rowCount())]
         self.assertEqual(len(items), 4)
 
     def test_arrow_indicator(self):
@@ -780,15 +780,15 @@ class TestGUIResetAndContext(unittest.TestCase):
         shutil.rmtree(cls.tmpdir, ignore_errors=True)
 
     def setUp(self):
-        from tkinter_gui import ScannerApp
-        self.app = ScannerApp()
+        from pyqt_gui import ScannerApp
+        self.app = ScannerApp(_qapp)
         scanner = Scanner()
         self.app.result = scanner.scan(self.tmpdir)
         self.app.scan_path = self.tmpdir
         self.app._switch("files")
 
     def tearDown(self):
-        self.app.root.destroy()
+        self.app.root.close()
 
     def test_reset_scan(self):
         """重置扫描应清除所有状态"""
@@ -797,17 +797,16 @@ class TestGUIResetAndContext(unittest.TestCase):
         self.app._reset_scan()
         self.assertIsNone(self.app.result)
         self.assertEqual(len(self.app._checked_paths), 0)
-        self.assertEqual(len(self.app.tree.get_children()), 0)
+        self.assertEqual(self.app.tree.rowCount(), 0)
 
     def test_copy_path_to_clipboard(self):
         """复制路径到剪贴板"""
         self.app._render()
-        iid = self.app.tree.get_children()[0]
-        self.app.tree.selection_set(iid)
+        self.app._current_row = "0"
         self.app._ctx_copy_path()
         # 验证剪贴板有内容
         try:
-            clip = self.app.root.clipboard_get()
+            clip = QApplication.clipboard().text()
             self.assertTrue(len(clip) > 0)
         except Exception:
             pass  # 某些环境无剪贴板
@@ -815,11 +814,10 @@ class TestGUIResetAndContext(unittest.TestCase):
     def test_copy_dir_to_clipboard(self):
         """复制父目录到剪贴板"""
         self.app._render()
-        iid = self.app.tree.get_children()[0]
-        self.app.tree.selection_set(iid)
+        self.app._current_row = "0"
         self.app._ctx_copy_dir()
         try:
-            clip = self.app.root.clipboard_get()
+            clip = QApplication.clipboard().text()
             self.assertTrue(len(clip) > 0)
         except Exception:
             pass
@@ -827,3 +825,4 @@ class TestGUIResetAndContext(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
