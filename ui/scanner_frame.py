@@ -15,10 +15,10 @@ from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit,
     QCheckBox, QTableWidget, QTableWidgetItem, QHeaderView,
     QProgressBar, QFrame, QMenu, QAction, QFileDialog, QMessageBox,
-    QSizePolicy, QAbstractItemView, QApplication,
+    QSizePolicy, QAbstractItemView, QApplication, QToolButton,
 )
-from PyQt5.QtCore import Qt, QThread, pyqtSignal
-from PyQt5.QtGui import QColor, QFont
+from PyQt5.QtCore import Qt, QThread, pyqtSignal, QTimer
+from PyQt5.QtGui import QColor, QFont, QFontMetrics
 
 _script_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, _script_dir)
@@ -94,28 +94,8 @@ class ScannerFrame(QWidget):
         self._build_statusbar(outer)
 
     def _build_header(self, layout):
-        hdr = QWidget()
-        hdr_layout = QHBoxLayout(hdr)
-        hdr_layout.setContentsMargins(0, 0, 0, 0)
-
-        left = QWidget()
-        left_layout = QHBoxLayout(left)
-        left_layout.setContentsMargins(0, 0, 0, 0)
-        title = QLabel("DiskScanner")
-        title.setFont(make_font(F_TITLE))
-        title.setStyleSheet(f"color: {C['accent']};")
-        left_layout.addWidget(title)
-        ver = QLabel(" v1.0 ")
-        ver.setFont(make_font(F_TINY))
-        ver.setStyleSheet(f"color: {C['text2']}; background-color: {C['surface']}; border-radius: 4px; padding: 2px 6px;")
-        left_layout.addWidget(ver)
-        left_layout.addStretch()
-        hdr_layout.addWidget(left, stretch=1)
-
-        self._new_scan_btn = RoundButton(hdr, "New Scan", self._reset_scan,
-                                          bg=C["btn_bg"], fg=C["text"])
-        hdr_layout.addWidget(self._new_scan_btn)
-        layout.addWidget(hdr)
+        # Header 区域已移除标题文字
+        pass
 
     def _build_controls(self, layout):
         card = QFrame()
@@ -219,19 +199,57 @@ class ScannerFrame(QWidget):
         tb.addWidget(sep)
         tb.addSpacing(6)
 
-        self._check_all_btn = RoundButton(None, "CHECK PAGE", self._check_all_on_page,
-                                            bg=C["btn_bg"], fg=C["text"], padx=8)
-        tb.addWidget(self._check_all_btn)
         self._del_btn = RoundButton(None, "DELETE", self._delete_checked,
                                      bg="#da3633", fg="#ffffff", hover_bg="#f85149", padx=10)
         tb.addWidget(self._del_btn)
-        self._clear_btn = RoundButton(None, "CLEAR", self._clear_all_checks,
-                                       bg=C["btn_bg"], fg=C["text"], padx=8)
-        tb.addWidget(self._clear_btn)
-        tb.addWidget(RoundButton(None, "CSV", lambda: self._export("csv"),
-                                  bg=C["btn_bg"], fg=C["text"], padx=10))
-        tb.addWidget(RoundButton(None, "JSON", lambda: self._export("json"),
-                                  bg=C["btn_bg"], fg=C["text"], padx=10))
+
+        # Export 下拉菜单
+        export_btn = QToolButton()
+        export_btn.setText("EXPORT")
+        export_btn.setPopupMode(QToolButton.InstantPopup)
+        export_btn.setFont(make_font(F_BTN))
+        export_btn.setStyleSheet(f"""
+            QToolButton {{
+                background-color: {C['btn_bg']};
+                color: {C['text']};
+                border: none;
+                border-radius: 6px;
+                padding: 5px 14px;
+                font-size: 9pt;
+                font-weight: bold;
+            }}
+            QToolButton:hover {{
+                background-color: {C['btn_hover']};
+            }}
+            QToolButton::menu-indicator {{
+                image: none;
+            }}
+        """)
+        export_menu = QMenu(export_btn)
+        export_menu.setStyleSheet(f"""
+            QMenu {{
+                background-color: {C['surface']};
+                color: {C['text']};
+                border: 1px solid {C['border']};
+                border-radius: 6px;
+                padding: 4px;
+            }}
+            QMenu::item {{
+                padding: 6px 20px;
+                border-radius: 4px;
+            }}
+            QMenu::item:selected {{
+                background-color: {C['tree_sel']};
+            }}
+        """)
+        export_csv = QAction("CSV", export_btn)
+        export_csv.triggered.connect(lambda: self._export("csv"))
+        export_json = QAction("JSON", export_btn)
+        export_json.triggered.connect(lambda: self._export("json"))
+        export_menu.addAction(export_csv)
+        export_menu.addAction(export_json)
+        export_btn.setMenu(export_menu)
+        tb.addWidget(export_btn)
 
         tb.addStretch()
 
@@ -255,14 +273,6 @@ class ScannerFrame(QWidget):
         self.tree_title.setStyleSheet(f"color: {C['text2']};")
         tb.addWidget(self.tree_title)
 
-        # 全选/全取消按钮
-        self._select_all_btn = RoundButton(None, "SELECT ALL", self._check_all_on_page,
-                                            bg=C["btn_bg"], fg=C["text"], padx=8)
-        tb.addWidget(self._select_all_btn)
-        self._deselect_all_btn = RoundButton(None, "CLEAR", self._uncheck_all_on_page,
-                                              bg=C["btn_bg"], fg=C["text"], padx=8)
-        tb.addWidget(self._deselect_all_btn)
-
         layout.addLayout(tb)
 
     def _build_tree(self, layout):
@@ -283,11 +293,20 @@ class ScannerFrame(QWidget):
         self.tree.customContextMenuRequested.connect(self._on_rightclick)
         self.tree.itemSelectionChanged.connect(self._on_select)
         self.tree.cellDoubleClicked.connect(self._on_dblclick)
+        self.tree.cellClicked.connect(self._on_cell_clicked)
         self.tree.horizontalHeader().sectionClicked.connect(self._on_header_clicked)
 
         wrap_layout.addWidget(self.tree)
         layout.addWidget(wrap, stretch=1)
         self._check_header = None  # 全选/全取消 表头控件
+
+        # 表头全选 checkbox（初始隐藏，有数据时显示）
+        self._header_cb = QCheckBox(self.tree)
+        self._header_cb.setVisible(False)
+        self._header_cb.setStyleSheet("background: transparent;")
+        self._header_cb.stateChanged.connect(self._on_header_check_clicked)
+        self.tree.horizontalHeader().sectionResized.connect(self._update_header_cb_pos)
+        self.tree.horizontalHeader().sectionMoved.connect(self._update_header_cb_pos)
 
     def _build_detail(self, layout):
         det = QFrame()
@@ -393,7 +412,9 @@ class ScannerFrame(QWidget):
 
     def _render(self):
         if not self.result:
+            self._header_cb.setVisible(False)
             return
+        self._header_cb.setVisible(True)
         r = self.result
 
         files = list(r.all_files)
@@ -432,7 +453,7 @@ class ScannerFrame(QWidget):
         is_dirs = self.view_mode == "dirs"
         if is_dirs:
             cols = ["check", "path", "size", "files", "subdirs", "pct", "modified"]
-            widths = [50, 0, 110, 80, 80, 70, 150]  # 0 = Stretch
+            widths = [50, 0, 130, 80, 80, 70, 150]  # 0 = Stretch
             header_labels = [
                 "",
                 f"Path",
@@ -444,7 +465,7 @@ class ScannerFrame(QWidget):
             ]
         else:
             cols = ["check", "path", "size", "ext", "pct", "modified"]
-            widths = [50, 0, 110, 80, 70, 150]  # 0 = Stretch
+            widths = [50, 0, 130, 80, 70, 150]  # 0 = Stretch
             header_labels = [
                 "",
                 f"Path",
@@ -457,14 +478,15 @@ class ScannerFrame(QWidget):
         self.tree.setColumnCount(len(cols))
         self.tree.setHorizontalHeaderLabels(header_labels)
         header = self.tree.horizontalHeader()
-        # check 列 (0): Fixed 不可拖拽
+        # check 列 (0): Fixed 固定宽度
         header.setSectionResizeMode(0, QHeaderView.Fixed)
+        self.tree.setColumnWidth(0, 50)
         # path 列 (1): Stretch 自动填满剩余空间
         header.setSectionResizeMode(1, QHeaderView.Stretch)
-        # 其余列: Fixed 固定宽度
+        # 其余列: Interactive 可手动拖拽调整
         for i, w in enumerate(widths):
             if i >= 2 and w > 0:
-                header.setSectionResizeMode(i, QHeaderView.Fixed)
+                header.setSectionResizeMode(i, QHeaderView.Interactive)
                 self.tree.setColumnWidth(i, w)
         self.tree.setRowCount(len(items))
         self._cols = cols
@@ -473,7 +495,7 @@ class ScannerFrame(QWidget):
         for i, node in enumerate(items):
             iid = str(i)
             self.item_map[iid] = node
-            pct = f"{node.size / total * 100:.1f}%"
+            pct = f"{round(node.size / total * 100)}%"
             checked = node.path in self._checked_paths
 
             if is_dirs:
@@ -494,26 +516,27 @@ class ScannerFrame(QWidget):
                 item = QTableWidgetItem(val)
                 item.setBackground(bg)
                 if j == 0:
-                    # 隐藏文本项，QCheckBox 控件覆盖其上
+                    # 保留文本标记以兼容测试
                     item.setFlags(item.flags() & ~Qt.ItemIsSelectable)
                     item.setText("[x]" if checked else "[ ]")
                     self.tree.setItem(i, j, item)
-                    cb = QCheckBox()
-                    cb.setChecked(checked)
-                    # 移除 checkbox 默认背景，使其透明融入行背景
-                    cb.setStyleSheet(f"background: transparent; color: {C['text']};")
-                    cb.stateChanged.connect(
-                        lambda state, row_idx=i: self._on_checkbox_changed(row_idx, state)
-                    )
-                    self.tree.setCellWidget(i, j, cb)
                 elif j in (2, 3, 4, 5) and not is_dirs or j in (2, 3, 4, 5, 6) and is_dirs:
                     if j >= 2:
                         item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
                     self.tree.setItem(i, j, item)
                 else:
+                    if j == 1:
+                        # Path 列：省略显示，tooltip 显示完整路径
+                        fm = QFontMetrics(self.tree.font())
+                        col_width = self.tree.columnWidth(1)
+                        max_width = max(col_width - 20, 100)
+                        elided = fm.elidedText(val, Qt.ElideMiddle, max_width)
+                        item.setText(elided)
+                        item.setToolTip(val)
                     self.tree.setItem(i, j, item)
 
         self._update_header_check()
+        QTimer.singleShot(0, self._update_header_cb_pos)
 
         vlabel = "Directories" if self.view_mode == "dirs" else "Files"
         checked_count = len(self._checked_paths)
@@ -552,10 +575,20 @@ class ScannerFrame(QWidget):
     def _sort_mode_key(self):
         if self.sort_col == "size":
             return "size-desc" if self.sort_reverse else "size-asc"
-        elif self.sort_col in ("name", "path"):
-            return "name"
+        elif self.sort_col == "name":
+            return "name-desc" if self.sort_reverse else "name"
+        elif self.sort_col == "path":
+            return "path-desc" if self.sort_reverse else "path"
         elif self.sort_col == "modified":
-            return "modified"
+            return "modified" if self.sort_reverse else "modified-asc"
+        elif self.sort_col == "pct":
+            return "size-desc" if self.sort_reverse else "size-asc"
+        elif self.sort_col == "files":
+            return "files-desc" if self.sort_reverse else "files-asc"
+        elif self.sort_col == "subdirs":
+            return "subdirs-desc" if self.sort_reverse else "subdirs-asc"
+        elif self.sort_col == "ext":
+            return "ext-desc" if self.sort_reverse else "ext"
         return "size-desc"
 
     def _sort_by(self, col):
@@ -572,7 +605,7 @@ class ScannerFrame(QWidget):
             return
         if logical_index < len(self._cols):
             col_name = self._cols[logical_index]
-            sortable = {"path", "size", "files", "subdirs", "ext", "modified", "name"}
+            sortable = {"path", "size", "files", "subdirs", "ext", "pct", "modified", "name"}
             if col_name in sortable:
                 self._sort_by(col_name)
 
@@ -613,24 +646,44 @@ class ScannerFrame(QWidget):
 
     def _on_header_check_clicked(self):
         """点击表头 全选/全取消 按钮"""
-        row_count = self.tree.rowCount()
-        if row_count == 0:
+        if not hasattr(self, '_header_cb'):
             return
-        # 判断当前页是否全部已勾选
-        all_checked = True
-        for i in range(row_count):
-            cb = self.tree.cellWidget(i, 0)
-            if cb and not cb.isChecked():
-                all_checked = False
-                break
-        if all_checked:
-            self._uncheck_all_on_page()
-        else:
+        checked = self._header_cb.isChecked()
+        if checked:
             self._check_all_on_page()
+        else:
+            self._uncheck_all_on_page()
 
     def _update_header_check(self):
         """更新全选/全取消按钮状态提示"""
-        pass
+        if not hasattr(self, '_header_cb'):
+            return
+        row_count = self.tree.rowCount()
+        if row_count == 0:
+            self._header_cb.setChecked(False)
+            return
+        all_checked = True
+        for i in range(row_count):
+            iid = str(i)
+            node = self.item_map.get(iid)
+            if node and node.path not in self._checked_paths:
+                all_checked = False
+                break
+        self._header_cb.blockSignals(True)
+        self._header_cb.setChecked(all_checked)
+        self._header_cb.blockSignals(False)
+
+    def _update_header_cb_pos(self):
+        """更新表头 checkbox 位置"""
+        header = self.tree.horizontalHeader()
+        x = header.sectionPosition(0)
+        w = header.sectionSize(0)
+        h = header.height()
+        cb_size = self._header_cb.sizeHint()
+        cx = x + (w - cb_size.width()) // 2
+        cy = (h - cb_size.height()) // 2
+        self._header_cb.move(cx, cy)
+        self._header_cb.resize(cb_size.width(), cb_size.height())
 
     def _on_select(self):
         row = self.tree.currentRow()
@@ -649,6 +702,12 @@ class ScannerFrame(QWidget):
             info = f"[FILE] {node.path}   {format_size(node.size)}   {node.extension or '?'}"
         self.detail_label.setText(info)
         self.del_cmd_label.setText(f"$ {cmd}")
+
+    def _on_cell_clicked(self, row, col):
+        """单击单元格时切换勾选状态（仅限第一列）"""
+        if col == 0:
+            iid = str(row)
+            self._toggle_check(iid)
 
     def _on_dblclick(self, row, col):
         iid = str(row)
@@ -793,8 +852,9 @@ class ScannerFrame(QWidget):
 
     def _delete_checked(self):
         if not self._checked_paths:
-            InfoDialog(self.root, "Info",
-                       "No items checking.\nClick the checkbox column to select items.")
+            InfoDialog(self.root, "No Selection",
+                       "Please select at least one item to delete.\n"
+                       "Click the first column [ ] to mark items for deletion.")
             return
 
         nodes = []

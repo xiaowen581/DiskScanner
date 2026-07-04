@@ -58,11 +58,14 @@ QTabBar::tab {
     padding: 8px 16px;
     border: none;
     min-width: 80px;
+    font-family: "Microsoft YaHei UI", "Segoe UI", sans-serif;
+    font-size: 8pt;
 }
 QTabBar::tab:selected {
     background: %(bg)s;
     color: %(accent)s;
     border-bottom: 2px solid %(accent)s;
+    font-weight: bold;
 }
 QTabBar::tab:hover:!selected {
     background: %(surface2)s;
@@ -73,11 +76,14 @@ QTabWidget#dockerTabs QTabBar::tab {
     background: %(surface2)s;
     color: %(text2)s;
     padding: 6px 12px;
+    font-family: "Microsoft YaHei UI", "Segoe UI", sans-serif;
+    font-size: 10pt;
 }
 QTabWidget#dockerTabs QTabBar::tab:selected {
     background: %(bg)s;
     color: %(cyan)s;
     border-bottom: 2px solid %(cyan)s;
+    font-weight: bold;
 }
 
 /* ── 表格 QTableWidget ── */

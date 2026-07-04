@@ -26,7 +26,7 @@ import pyqt_gui as _tkmod
 _tkmod._DIALOG_AUTO_DISMISS = True
 
 # PyQt5 测试需要显示服务器，在无头环境中跳过
-from PyQt5.QtWidgets import QApplication
+from PyQt5.QtWidgets import QApplication, QCheckBox
 try:
     _qapp = QApplication.instance() or QApplication(sys.argv)
     _HAS_DISPLAY = True
