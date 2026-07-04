@@ -409,7 +409,16 @@ def _fmt_time(ts):
 
 
 def main():
-    port = int(sys.argv[1]) if len(sys.argv) > 1 else 8888
+    if len(sys.argv) > 1 and sys.argv[1] in ('--help', '-h'):
+        print("Usage: python gui.py [port]")
+        print("  port  端口号 (默认: 8888)")
+        sys.exit(0)
+    try:
+        port = int(sys.argv[1]) if len(sys.argv) > 1 else 8888
+    except ValueError:
+        print(f"Error: Invalid port number: {sys.argv[1]}")
+        print("Usage: python gui.py [port]")
+        sys.exit(1)
     server = HTTPServer(('127.0.0.1', port), APIHandler)
     url = f'http://127.0.0.1:{port}'
 

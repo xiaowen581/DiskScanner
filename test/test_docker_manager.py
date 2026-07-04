@@ -111,6 +111,13 @@ class TestParseDockerSize(unittest.TestCase):
 # ─────────────────────────────────────────────
 
 class TestRunDocker(unittest.TestCase):
+    def setUp(self):
+        self._which_patcher = patch('docker_manager.shutil.which', return_value="/usr/bin/docker")
+        self._which_patcher.start()
+
+    def tearDown(self):
+        self._which_patcher.stop()
+
     @patch('docker_manager.subprocess.run')
     def test_run_success(self, mock_run):
         mock_run.return_value = MagicMock(returncode=0, stdout="hello\n", stderr="")
@@ -125,10 +132,10 @@ class TestRunDocker(unittest.TestCase):
         self.assertEqual(rc, 1)
         self.assertEqual(err, "error msg")
 
-    @patch('docker_manager.shutil.which', return_value=None)
-    def test_docker_not_found(self, mock_which):
-        with self.assertRaises(FileNotFoundError):
-            _run_docker(["ps"])
+    def test_docker_not_found(self):
+        with patch('docker_manager.shutil.which', return_value=None):
+            with self.assertRaises(FileNotFoundError):
+                _run_docker(["ps"])
 
     @patch('docker_manager.subprocess.run')
     def test_timeout(self, mock_run):
