@@ -170,10 +170,14 @@ def main():
     RUNS = 3
 
     # ── 测试 1: 真实目录 ─────────────────────────────────
+    project_root = str(Path(__file__).parent.absolute())
+    venv_site_packages = os.path.join(sys.prefix, 'Lib', 'site-packages') if sys.platform == 'win32' else os.path.join(sys.prefix, 'lib', f'python{sys.version_info.major}.{sys.version_info.minor}', 'site-packages')
+    python_install = str(Path(sys.executable).parent)
+
     real_paths = [
-        ("项目目录", r"C:\Users\psh\Documents\github"),
-        ("venv site-packages", r"C:\Users\psh\Documents\github\.venv\Lib\site-packages"),
-        ("Python 安装目录", r"C:\Users\psh\AppData\Local\Programs\Python\Python313"),
+        ("项目目录", project_root),
+        ("venv site-packages", venv_site_packages),
+        ("Python 安装目录", python_install),
     ]
 
     for label, path in real_paths:

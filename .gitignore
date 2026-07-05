@@ -10,6 +10,7 @@ build/
 
 # PyInstaller
 *.manifest
+*.spec
 *.spec.bak
 warn*.txt
 
