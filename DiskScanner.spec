@@ -4,9 +4,9 @@
 a = Analysis(
     ['pyqt_gui.py'],
     pathex=[],
-    binaries=[],
-    datas=[],
-    hiddenimports=[],
+    binaries=[('C:\\Users\\psh\\Documents\\github\\.venv\\Lib\\site-packages\\scanner_core\\scanner_core.cp313-win_amd64.pyd', 'scanner_core')],
+    datas=[('C:\\Users\\psh\\Documents\\github\\.venv\\Lib\\site-packages\\scanner_core\\__init__.py', 'scanner_core')],
+    hiddenimports=['scanner_core'],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],

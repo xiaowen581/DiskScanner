@@ -17,6 +17,16 @@ from dataclasses import dataclass, field
 from typing import List, Optional
 from datetime import datetime
 
+# ─────────────────────────────────────────────
+# Rust 加速模块导入（可选）
+# ─────────────────────────────────────────────
+
+try:
+    from scanner_core import FileNode, DirNode, ScanResult, Scanner
+    _HAS_RUST = True
+except ImportError:
+    _HAS_RUST = False
+
 
 # ─────────────────────────────────────────────
 # Windows 终端兼容性处理
@@ -69,41 +79,42 @@ if sys.stdout is None or not sys.stdout.isatty():
 
 
 # ─────────────────────────────────────────────
-# 数据模型
+# 数据模型（纯 Python fallback，当 Rust 模块不可用时使用）
 # ─────────────────────────────────────────────
 
-@dataclass
-class FileNode:
-    name: str
-    path: str
-    size: int
-    modified: float
-    extension: str
-    parent_path: str = ""
+if not _HAS_RUST:
+    @dataclass
+    class FileNode:
+        name: str
+        path: str
+        size: int
+        modified: float
+        extension: str
+        parent_path: str = ""
 
 
-@dataclass
-class DirNode:
-    name: str
-    path: str
-    size: int = 0
-    file_count: int = 0
-    dir_count: int = 0
-    children: list = field(default_factory=list)
-    parent_path: str = ""
-    modified: float = 0.0
+    @dataclass
+    class DirNode:
+        name: str
+        path: str
+        size: int = 0
+        file_count: int = 0
+        dir_count: int = 0
+        children: list = field(default_factory=list)
+        parent_path: str = ""
+        modified: float = 0.0
 
 
-@dataclass
-class ScanResult:
-    root: Optional[DirNode] = None
-    total_size: int = 0
-    total_files: int = 0
-    total_dirs: int = 0
-    scan_duration: float = 0.0
-    all_files: List[FileNode] = field(default_factory=list)
-    all_dirs: List[DirNode] = field(default_factory=list)
-    skipped_count: int = 0
+    @dataclass
+    class ScanResult:
+        root: Optional[DirNode] = None
+        total_size: int = 0
+        total_files: int = 0
+        total_dirs: int = 0
+        scan_duration: float = 0.0
+        all_files: List[FileNode] = field(default_factory=list)
+        all_dirs: List[DirNode] = field(default_factory=list)
+        skipped_count: int = 0
 
 
 # ─────────────────────────────────────────────
@@ -196,110 +207,111 @@ def get_terminal_height() -> int:
 
 
 # ─────────────────────────────────────────────
-# 扫描引擎
+# 扫描引擎（纯 Python fallback，当 Rust 模块不可用时使用）
 # ─────────────────────────────────────────────
 
-class Scanner:
-    def __init__(self, follow_symlinks: bool = False):
-        self.follow_symlinks = follow_symlinks
-        self.all_files: List[FileNode] = []
-        self.all_dirs: List[DirNode] = []
-        self.skipped_count = 0
-        self._file_count = 0
-        self._dir_count = 0
-        self._current_path = ""
+if not _HAS_RUST:
+    class Scanner:
+        def __init__(self, follow_symlinks: bool = False):
+            self.follow_symlinks = follow_symlinks
+            self.all_files: List[FileNode] = []
+            self.all_dirs: List[DirNode] = []
+            self.skipped_count = 0
+            self._file_count = 0
+            self._dir_count = 0
+            self._current_path = ""
 
-    @property
-    def progress_info(self):
-        return self._file_count, self._current_path
+        @property
+        def progress_info(self):
+            return self._file_count, self._current_path
 
-    def scan(self, root_path: str) -> ScanResult:
-        start_time = time.time()
-        self.all_files.clear()
-        self.all_dirs.clear()
-        self.skipped_count = 0
-        self._file_count = 0
-        self._dir_count = 0
+        def scan(self, root_path: str) -> ScanResult:
+            start_time = time.time()
+            self.all_files.clear()
+            self.all_dirs.clear()
+            self.skipped_count = 0
+            self._file_count = 0
+            self._dir_count = 0
 
-        abs_path = os.path.abspath(root_path)
-        if not os.path.exists(abs_path):
-            raise FileNotFoundError(f"路径不存在: {abs_path}")
-        if not os.path.isdir(abs_path):
-            raise ValueError(f"指定路径不是目录: {abs_path}")
+            abs_path = os.path.abspath(root_path)
+            if not os.path.exists(abs_path):
+                raise FileNotFoundError(f"路径不存在: {abs_path}")
+            if not os.path.isdir(abs_path):
+                raise ValueError(f"指定路径不是目录: {abs_path}")
 
-        root_dir = self._scan_dir(abs_path, parent_path="")
-        scan_duration = time.time() - start_time
+            root_dir = self._scan_dir(abs_path, parent_path="")
+            scan_duration = time.time() - start_time
 
-        return ScanResult(
-            root=root_dir,
-            total_size=root_dir.size if root_dir else 0,
-            total_files=self._file_count,
-            total_dirs=self._dir_count,
-            scan_duration=scan_duration,
-            all_files=list(self.all_files),
-            all_dirs=list(self.all_dirs),
-            skipped_count=self.skipped_count,
-        )
+            return ScanResult(
+                root=root_dir,
+                total_size=root_dir.size if root_dir else 0,
+                total_files=self._file_count,
+                total_dirs=self._dir_count,
+                scan_duration=scan_duration,
+                all_files=list(self.all_files),
+                all_dirs=list(self.all_dirs),
+                skipped_count=self.skipped_count,
+            )
 
-    def _scan_dir(self, dir_path: str, parent_path: str) -> DirNode:
-        self._current_path = dir_path
-        try:
-            stat = os.stat(dir_path, follow_symlinks=self.follow_symlinks)
-            modified = stat.st_mtime
-        except (OSError, PermissionError):
-            modified = 0.0
-
-        dir_node = DirNode(
-            name=os.path.basename(dir_path) or dir_path,
-            path=dir_path,
-            parent_path=parent_path,
-            modified=modified,
-        )
-        self._dir_count += 1
-        self.all_dirs.append(dir_node)
-
-        try:
-            entries = list(os.scandir(dir_path))
-        except (PermissionError, OSError):
-            self.skipped_count += 1
-            return dir_node
-
-        for entry in entries:
+        def _scan_dir(self, dir_path: str, parent_path: str) -> DirNode:
+            self._current_path = dir_path
             try:
-                if not self.follow_symlinks and entry.is_symlink():
-                    continue
+                stat = os.stat(dir_path, follow_symlinks=self.follow_symlinks)
+                modified = stat.st_mtime
+            except (OSError, PermissionError):
+                modified = 0.0
 
-                if entry.is_dir(follow_symlinks=False):
-                    child_dir = self._scan_dir(entry.path, parent_path=dir_path)
-                    dir_node.size += child_dir.size
-                    dir_node.dir_count += 1
-                    dir_node.children.append(child_dir)
+            dir_node = DirNode(
+                name=os.path.basename(dir_path) or dir_path,
+                path=dir_path,
+                parent_path=parent_path,
+                modified=modified,
+            )
+            self._dir_count += 1
+            self.all_dirs.append(dir_node)
 
-                elif entry.is_file(follow_symlinks=False):
-                    try:
-                        file_stat = entry.stat(follow_symlinks=False)
-                        file_node = FileNode(
-                            name=entry.name,
-                            path=entry.path,
-                            size=file_stat.st_size,
-                            modified=file_stat.st_mtime,
-                            extension=os.path.splitext(entry.name)[1].lower(),
-                            parent_path=dir_path,
-                        )
-                    except (OSError, PermissionError):
-                        self.skipped_count += 1
-                        continue
-
-                    dir_node.size += file_node.size
-                    dir_node.file_count += 1
-                    dir_node.children.append(file_node)
-                    self.all_files.append(file_node)
-                    self._file_count += 1
-
+            try:
+                entries = list(os.scandir(dir_path))
             except (PermissionError, OSError):
                 self.skipped_count += 1
+                return dir_node
 
-        return dir_node
+            for entry in entries:
+                try:
+                    if not self.follow_symlinks and entry.is_symlink():
+                        continue
+
+                    if entry.is_dir(follow_symlinks=False):
+                        child_dir = self._scan_dir(entry.path, parent_path=dir_path)
+                        dir_node.size += child_dir.size
+                        dir_node.dir_count += 1
+                        dir_node.children.append(child_dir)
+
+                    elif entry.is_file(follow_symlinks=False):
+                        try:
+                            file_stat = entry.stat(follow_symlinks=False)
+                            file_node = FileNode(
+                                name=entry.name,
+                                path=entry.path,
+                                size=file_stat.st_size,
+                                modified=file_stat.st_mtime,
+                                extension=os.path.splitext(entry.name)[1].lower(),
+                                parent_path=dir_path,
+                            )
+                        except (OSError, PermissionError):
+                            self.skipped_count += 1
+                            continue
+
+                        dir_node.size += file_node.size
+                        dir_node.file_count += 1
+                        dir_node.children.append(file_node)
+                        self.all_files.append(file_node)
+                        self._file_count += 1
+
+                except (PermissionError, OSError):
+                    self.skipped_count += 1
+
+            return dir_node
 
 
 # ─────────────────────────────────────────────
