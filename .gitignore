@@ -30,6 +30,9 @@ env/
 coverage_html/
 htmlcov/
 
+# 本地环境配置
+.env
+
 # OS
 .DS_Store
 Thumbs.db

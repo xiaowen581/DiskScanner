@@ -4,7 +4,7 @@
 DiskScanner Web GUI — 基于浏览器的磁盘空间分析界面
 使用 Python 标准库，无需任何第三方依赖
 
-启动方式: python3 gui.py [port]
+启动方式: python3 web_ui.py [port]
 默认端口: 8888
 """
 
@@ -109,7 +109,7 @@ class APIHandler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(content)
         except FileNotFoundError:
-            self.send_json({'error': 'index.html 文件未找到，请确保 index.html 与 gui.py 在同一目录'}, 404)
+            self.send_json({'error': 'index.html 文件未找到，请确保 index.html 与 web_ui.py 在同一目录'}, 404)
 
     def _api_status(self):
         self.send_json({
@@ -410,14 +410,14 @@ def _fmt_time(ts):
 
 def main():
     if len(sys.argv) > 1 and sys.argv[1] in ('--help', '-h'):
-        print("Usage: python gui.py [port]")
+        print("Usage: python web_ui.py [port]")
         print("  port  端口号 (默认: 8888)")
         sys.exit(0)
     try:
         port = int(sys.argv[1]) if len(sys.argv) > 1 else 8888
     except ValueError:
         print(f"Error: Invalid port number: {sys.argv[1]}")
-        print("Usage: python gui.py [port]")
+        print("Usage: python web_ui.py [port]")
         sys.exit(1)
     server = HTTPServer(('127.0.0.1', port), APIHandler)
     url = f'http://127.0.0.1:{port}'

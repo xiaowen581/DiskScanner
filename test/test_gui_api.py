@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-DiskScanner Web GUI (gui.py) 单元测试
+DiskScanner Web GUI (web_ui.py) 单元测试
 覆盖: HTTP API 路由、扫描、导出、浏览、状态查询
 运行: python3 -m unittest test_gui_api.py -v
 """
@@ -25,8 +25,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from disk_scanner import Scanner, ScanResult, FileNode, DirNode
 
 # 导入 gui 模块
-import web_gui as gui_module
-from web_gui import APIHandler, AppState, STATE
+import web_ui as gui_module
+from web_ui import APIHandler, AppState, STATE
 
 # 检测端口可用性
 def find_free_port():
