@@ -3,7 +3,7 @@
 """
 ai/config.py — AI 配置管理模块
 管理 OpenAI API 的 base_url、api_key、model 等全局设置
-配置文件路径: %APPDATA%\DiskScanner\config\settings.json
+配置文件路径: ``%APPDATA%\\DiskScanner\\config\\settings.json``
 """
 
 import os

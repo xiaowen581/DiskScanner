@@ -8,7 +8,11 @@ ai/ — DiskScanner AI 辅助分析模块
 from ai.config import AIConfig
 from ai.client import AIClient, AIError, AINotConfiguredError, AINetworkError, AITimeoutError
 from ai.cache import AICache
-from ai.worker import AIWorker
+
+try:
+    from ai.worker import AIWorker
+except ImportError:
+    AIWorker = None  # type: ignore
 
 __all__ = [
     'AIConfig',
