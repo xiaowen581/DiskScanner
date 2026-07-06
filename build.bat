@@ -63,6 +63,26 @@ if %errorlevel% neq 0 (
     )
 )
 echo       PyInstaller 已就绪。
+
+if exist "scanner_core\Cargo.toml" (
+    echo [2.5/4] 检查并安装 maturin...
+    "%PYTHON%" -m pip show maturin >nul 2>&1
+    if !errorlevel! neq 0 (
+        echo       正在安装 maturin...
+        "%PYTHON%" -m pip install maturin --quiet
+        if !errorlevel! neq 0 (
+            echo [错误] 安装 maturin 失败，请手动安装: pip install maturin
+            pause
+            exit /b 1
+        )
+    )
+    echo       maturin 已就绪。
+) else (
+    echo [错误] 未找到 scanner_core\Cargo.toml，Rust 扩展模块缺失
+    echo        请确保 scanner_core 目录存在。
+    pause
+    exit /b 1
+)
 echo.
 
 REM ── 清理旧的构建产物 ─────────────────────────────────────────
@@ -74,28 +94,42 @@ if exist "ui\__pycache__" ( rmdir /s /q ui\__pycache__ >nul 2>&1 )
 echo       清理完成。
 echo.
 
+REM ── 构建 Rust 扩展模块 ─────────────────────────────────────
+echo [3.5/4] 构建 Rust 扩展模块...
+pushd scanner_core
+"%PYTHON%" -m maturin develop --release
+if !errorlevel! neq 0 (
+    echo [错误] Rust 扩展构建失败，请检查上方日志排查问题。
+    popd
+    pause
+    exit /b 1
+)
+popd
+echo       ✓ Rust 扩展构建成功
+echo.
+
 REM ── 构建可执行文件 ───────────────────────────────────────────
 echo [4/4] 开始打包 DiskScanner...
 echo.
 
-REM 构建 PyInstaller 命令
-set PYI_CMD="%PYTHON%" -m PyInstaller --name=DiskScanner --windowed --onefile --noconfirm --clean
+REM 通过 helper 脚本获取 scanner_core .pyd 和 __init__.py 路径
+for /f "tokens=1,* delims==" %%A in ('"%PYTHON%" _build_helper.py') do set %%A=%%B
+if not defined SCANNER_PYD (
+    echo [错误] 无法定位 scanner_core .pyd 文件
+    pause
+    exit /b 1
+)
+echo       scanner_core.pyd: %SCANNER_PYD%
+echo       scanner_core init: %SCANNER_INIT%
+echo.
 
 if exist "icon.ico" (
-    set PYI_CMD=%PYI_CMD% --icon=icon.ico
     echo       使用图标: icon.ico
+    "%PYTHON%" -m PyInstaller --name=DiskScanner --windowed --onefile --noconfirm --clean --hidden-import=scanner_core --add-binary="%SCANNER_PYD%;scanner_core" --add-data="%SCANNER_INIT%;scanner_core" --icon=icon.ico pyqt_gui.py
 ) else (
     echo       未找到 icon.ico，使用默认图标。
+    "%PYTHON%" -m PyInstaller --name=DiskScanner --windowed --onefile --noconfirm --clean --hidden-import=scanner_core --add-binary="%SCANNER_PYD%;scanner_core" --add-data="%SCANNER_INIT%;scanner_core" pyqt_gui.py
 )
-
-REM 入口文件
-set PYI_CMD=%PYI_CMD% pyqt_gui.py
-
-echo       命令: %PYI_CMD%
-echo.
-echo -----------------------------------------------------------
-
-%PYI_CMD%
 
 if %errorlevel% neq 0 (
     echo.
