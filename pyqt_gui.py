@@ -20,6 +20,7 @@ from PyQt5.QtCore import Qt
 from ui.theme import C, QSS, make_font
 from ui.scanner_frame import ScannerFrame
 from ui.docker_frame import DockerFrame
+from ai.config import AIConfig
 
 import ui._base as _base
 
@@ -32,6 +33,9 @@ class DiskScannerApp:
 
     def __init__(self, qapp=None):
         self._qapp = qapp or QApplication.instance() or QApplication(sys.argv)
+
+        # 加载 AI 配置
+        AIConfig.instance().load()
 
         self.root = QMainWindow()
         self.root.setWindowTitle("DiskScanner + Docker Manager")

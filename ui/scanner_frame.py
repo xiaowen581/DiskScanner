@@ -17,8 +17,8 @@ from PyQt5.QtWidgets import (
     QProgressBar, QFrame, QMenu, QAction, QFileDialog, QMessageBox,
     QSizePolicy, QAbstractItemView, QApplication, QToolButton,
 )
-from PyQt5.QtCore import Qt, QThread, pyqtSignal, QTimer
-from PyQt5.QtGui import QColor, QFont, QFontMetrics
+from PyQt5.QtCore import Qt, QThread, pyqtSignal, QTimer, QEvent
+from PyQt5.QtGui import QColor, QFont, QFontMetrics, QCursor
 
 _script_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, _script_dir)
@@ -31,6 +31,12 @@ from ui.theme import (
     C, F_TITLE, F_BODY, F_SMALL, F_TINY, F_BIG, F_MONO, F_BTN,
     RoundButton, StatCard, ConfirmDialog, InfoDialog, fmt_time, make_font,
 )
+from ai.config import AIConfig
+from ai.cache import AICache
+from ai.worker import AIWorker
+from ai.client import AINotConfiguredError
+from ui.ai_settings_dialog import AISettingsDialog
+from ui.ai_tooltip_widget import AIAnalysisPopover
 
 
 class ScanWorker(QThread):
@@ -77,6 +83,19 @@ class ScannerFrame(QWidget):
         self._total_items = 0
         self._checked_paths = set()
         self._current_row = None
+
+        # AI 模块
+        self._ai_config = AIConfig.instance()
+        self._ai_cache = AICache(self._ai_config)
+        self._ai_worker = None
+        self._ai_errors = {}
+        self._ai_analyzing = False
+        self._popover = None
+        self._hover_row = -1
+        self._hover_timer = QTimer()
+        self._hover_timer.setSingleShot(True)
+        self._hover_timer.setInterval(500)
+        self._hover_timer.timeout.connect(self._show_ai_tooltip)
 
         self._build_ui()
 
@@ -251,6 +270,12 @@ class ScannerFrame(QWidget):
         export_btn.setMenu(export_menu)
         tb.addWidget(export_btn)
 
+        # AI 设置按钮
+        self._ai_btn = RoundButton(None, "AI", self._open_ai_settings,
+                                    bg=C["purple"], fg="#ffffff",
+                                    hover_bg="#a855f7", padx=10)
+        tb.addWidget(self._ai_btn)
+
         tb.addStretch()
 
         # Page nav
@@ -308,6 +333,10 @@ class ScannerFrame(QWidget):
         self.tree.horizontalHeader().sectionResized.connect(self._update_header_cb_pos)
         self.tree.horizontalHeader().sectionMoved.connect(self._update_header_cb_pos)
 
+        # AI hover 事件过滤器
+        self.tree.viewport().installEventFilter(self)
+        self._popover = AIAnalysisPopover()
+
     def _build_detail(self, layout):
         det = QFrame()
         det.setStyleSheet(f"background-color: {C['surface']}; border-radius: 6px;")
@@ -339,6 +368,13 @@ class ScannerFrame(QWidget):
         self.result = None
         self._checked_paths.clear()
         self._clear_tree()
+        # 取消正在进行的 AI 分析
+        if self._ai_worker:
+            self._ai_worker.cancel()
+            self._ai_worker = None
+        self._ai_cache.clear()
+        self._ai_errors.clear()
+        self._ai_analyzing = False
         for sc in (self.sc_size, self.sc_files, self.sc_dirs, self.sc_time, self.sc_skip):
             sc.set_value("--")
         self.status_label.setText("Ready")
@@ -394,7 +430,19 @@ class ScannerFrame(QWidget):
             f"Done: {r.total_files:,} files, {r.total_dirs:,} dirs, "
             f"{r.scan_duration:.2f}s{skip_txt}")
         self._update_stats(r)
+
+        # 清理 AI 缓存并触发新分析
+        self._ai_cache.clear()
+        self._ai_errors.clear()
+        if self._ai_worker:
+            self._ai_worker.cancel()
+            self._ai_worker = None
+
         self._render()
+
+        # 自动触发 AI 分析
+        if self._ai_config.auto_analyze:
+            QTimer.singleShot(300, self._trigger_ai_analysis)
 
     def _on_scan_error(self, error_msg):
         self.progress.setVisible(False)
@@ -526,13 +574,22 @@ class ScannerFrame(QWidget):
                     self.tree.setItem(i, j, item)
                 else:
                     if j == 1:
-                        # Path 列：省略显示，tooltip 显示完整路径
+                        # Path 列：省略显示，tooltip 显示完整路径 + AI 分析
                         fm = QFontMetrics(self.tree.font())
                         col_width = self.tree.columnWidth(1)
                         max_width = max(col_width - 20, 100)
                         elided = fm.elidedText(val, Qt.ElideMiddle, max_width)
                         item.setText(elided)
-                        item.setToolTip(val)
+                        # Tooltip: 路径 + AI 分析摘要
+                        tooltip_text = val
+                        ai_info = self._ai_cache.get_item_result(node.path)
+                        if ai_info:
+                            desc = ai_info.get('description', '')
+                            deletability = ai_info.get('deletability', '')
+                            d_map = {'safe': '✓可删', 'caution': '⚠谨慎', 'unsafe': '✗勿删'}
+                            d_label = d_map.get(deletability, '')
+                            tooltip_text = f"{val}\n\nAI: {desc}\n建议: {d_label}"
+                        item.setToolTip(tooltip_text)
                     self.tree.setItem(i, j, item)
 
         self._update_header_check()
@@ -550,6 +607,10 @@ class ScannerFrame(QWidget):
             self._page_label.setText("")
         else:
             self._page_label.setText(f"{self._page + 1}/{max_page + 1}")
+
+        # 翻页后自动触发 AI 分析当前页
+        if self._ai_config.auto_analyze and self._ai_config.is_configured and self._total_items > 0:
+            QTimer.singleShot(200, self._trigger_ai_analysis_for_page)
 
     def _arrow(self, col):
         """返回排序箭头指示符"""
@@ -1012,4 +1073,168 @@ class ScannerFrame(QWidget):
         self.tree.setRowCount(0)
         self.item_map.clear()
         self._checked_paths.clear()
+
+    # ══════════════════════════════════════════════════
+    #  AI 分析功能
+    # ══════════════════════════════════════════════════
+
+    def _open_ai_settings(self):
+        """打开 AI 设置对话框"""
+        AISettingsDialog(self.root, self._ai_config)
+        # 设置变更后立即生效
+        if self._ai_config.is_configured and self.result and self._ai_config.auto_analyze:
+            QTimer.singleShot(100, self._trigger_ai_analysis)
+
+    def _trigger_ai_analysis(self):
+        """触发 AI 分析: 收集当前页及邻近页数据"""
+        if not self._ai_config.is_configured:
+            return
+        if not self.result or self._total_items == 0:
+            return
+        if self._ai_analyzing:
+            return
+
+        # 取消之前的 worker
+        if self._ai_worker:
+            self._ai_worker.cancel()
+            self._ai_worker = None
+
+        pages_to_analyze = {}
+        current = self._page
+        max_page = max(0, (self._total_items - 1) // self._page_size)
+        max_conc = self._ai_config.max_concurrent
+
+        # 收集当前页 + 前后页 (不超过 max_concurrent)
+        candidates = []
+        candidates.append(current)
+        if current + 1 <= max_page:
+            candidates.append(current + 1)
+        if current - 1 >= 0:
+            candidates.append(current - 1)
+
+        for p in candidates:
+            if len(pages_to_analyze) >= max_conc:
+                break
+            if self._ai_cache.has_page(p):
+                continue
+            start = p * self._page_size
+            end = start + self._page_size
+            items = self._sorted_items[start:end]
+            if items:
+                pages_to_analyze[p] = items
+
+        if not pages_to_analyze:
+            return
+
+        self._ai_analyzing = True
+        self.status_label.setText(
+            self.status_label.text() + f"  |  AI analyzing {len(pages_to_analyze)} page(s)...")
+
+        self._ai_worker = AIWorker(
+            pages_to_analyze, self.scan_path,
+            self._ai_config, self._ai_cache)
+        self._ai_worker.page_finished.connect(self._on_ai_page_finished)
+        self._ai_worker.page_error.connect(self._on_ai_page_error)
+        self._ai_worker.all_finished.connect(self._on_ai_all_finished)
+        self._ai_worker.start()
+
+    def _trigger_ai_analysis_for_page(self):
+        """翻页后触发当前页分析"""
+        if not self._ai_config.is_configured or not self.result:
+            return
+        if self._ai_cache.has_page(self._page):
+            return
+        # 如果已有 worker 在跑，不重复触发
+        if self._ai_worker and self._ai_worker.isRunning():
+            return
+        self._ai_analyzing = False  # 重置标志
+        self._trigger_ai_analysis()
+
+    def _on_ai_page_finished(self, page_idx, result):
+        """单页 AI 分析完成"""
+        if page_idx == self._page:
+            # 当前页分析完成，刷新 tooltip
+            self._refresh_ai_tooltips()
+            self.status_label.setText(
+                self.status_label.text().replace("analyzing", "page done"))
+
+    def _on_ai_page_error(self, page_idx, error_msg):
+        """单页分析失败"""
+        self._ai_errors[page_idx] = error_msg
+        err_short = error_msg[:60] if len(error_msg) > 60 else error_msg
+        current_text = self.status_label.text()
+        if "AI:" not in current_text:
+            self.status_label.setText(f"{current_text}  |  AI error: {err_short}")
+
+    def _on_ai_all_finished(self):
+        """全部分析完成"""
+        self._ai_worker = None
+        self._ai_analyzing = False
+        current_text = self.status_label.text()
+        # 更新状态栏
+        if self._ai_errors:
+            err_count = len(self._ai_errors)
+            self.status_label.setText(
+                current_text.split("  |  AI")[0] +
+                f"  |  AI done ({err_count} error(s))")
+        else:
+            self.status_label.setText(
+                current_text.split("  |  AI")[0] + "  |  AI analysis done")
+        # 刷新当前页 tooltip
+        self._refresh_ai_tooltips()
+
+    def _refresh_ai_tooltips(self):
+        """刷新当前页所有行的 AI tooltip"""
+        for row in range(self.tree.rowCount()):
+            node = self.item_map.get(str(row))
+            if not node:
+                continue
+            ai_info = self._ai_cache.get_item_result(node.path)
+            item = self.tree.item(row, 1)  # Path 列
+            if item and ai_info:
+                desc = ai_info.get('description', '')
+                deletability = ai_info.get('deletability', '')
+                d_map = {'safe': '✓可删', 'caution': '⚠谨慎', 'unsafe': '✗勿删'}
+                d_label = d_map.get(deletability, '')
+                item.setToolTip(f"{node.path}\n\nAI: {desc}\n建议: {d_label}")
+
+    def eventFilter(self, obj, event):
+        """事件过滤器: 监听表格 hover 显示 AI 浮窗"""
+        if obj == self.tree.viewport():
+            if event.type() == QEvent.MouseMove:
+                row = self.tree.rowAt(event.pos().y())
+                if row != self._hover_row:
+                    self._hover_row = row
+                    self._hover_timer.start()
+            elif event.type() == QEvent.Leave:
+                self._hover_timer.stop()
+                self._hover_row = -1
+                if self._popover:
+                    self._popover.hide_popover()
+            elif event.type() == QEvent.MouseButtonPress:
+                # 点击时隐藏浮窗
+                if self._popover:
+                    self._popover.hide_popover()
+        return super().eventFilter(obj, event)
+
+    def _show_ai_tooltip(self):
+        """显示 AI 分析浮窗"""
+        row = self._hover_row
+        if row < 0 or row >= self.tree.rowCount():
+            return
+        node = self.item_map.get(str(row))
+        if not node:
+            return
+
+        if not self._popover:
+            self._popover = AIAnalysisPopover()
+
+        ai_info = self._ai_cache.get_item_result(node.path)
+        if ai_info:
+            self._popover.show_for_item(node, ai_info, QCursor.pos())
+        elif self._ai_config.is_configured:
+            self._popover.show_loading(node, QCursor.pos())
+        else:
+            # AI 未配置，不显示
+            pass
 

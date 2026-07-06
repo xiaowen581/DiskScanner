@@ -1,5 +1,9 @@
 # DiskScanner PyQt5 Dependencies
 PyQt5>=5.15.0
 
+# AI 分析功能
+openai>=1.30.0
+pydantic>=2.0.0
+
 # Rust 扩展构建依赖（可选，用于构建 Rust 加速模块）
 maturin>=1.0
