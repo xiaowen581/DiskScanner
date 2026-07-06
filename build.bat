@@ -52,11 +52,12 @@ if %errorlevel% neq 0 (
 )
 
 echo [2/4] 检查并安装 PyInstaller...
-"%PYTHON%" -m pip show pyinstaller >nul 2>&1
-if %errorlevel% neq 0 (
+"%PYTHON%" -m pip list --format=columns 2>nul | findstr /i "^PyInstaller" >nul 2>&1
+if !errorlevel! neq 0 (
     echo       正在安装 PyInstaller...
     "%PYTHON%" -m pip install pyinstaller --quiet
-    if %errorlevel% neq 0 (
+    "%PYTHON%" -m pip list --format=columns 2>nul | findstr /i "^PyInstaller" >nul 2>&1
+    if !errorlevel! neq 0 (
         echo [错误] 安装 PyInstaller 失败。
         pause
         exit /b 1
@@ -66,10 +67,11 @@ echo       PyInstaller 已就绪。
 
 if exist "scanner_core\Cargo.toml" (
     echo [2.5/4] 检查并安装 maturin...
-    "%PYTHON%" -m pip show maturin >nul 2>&1
+    "%PYTHON%" -m pip list --format=columns 2>nul | findstr /i "^maturin" >nul 2>&1
     if !errorlevel! neq 0 (
         echo       正在安装 maturin...
         "%PYTHON%" -m pip install maturin --quiet
+        "%PYTHON%" -m pip list --format=columns 2>nul | findstr /i "^maturin" >nul 2>&1
         if !errorlevel! neq 0 (
             echo [错误] 安装 maturin 失败，请手动安装: pip install maturin
             pause
@@ -97,12 +99,25 @@ echo.
 REM ── 构建 Rust 扩展模块 ─────────────────────────────────────
 echo [3.5/4] 构建 Rust 扩展模块...
 pushd scanner_core
-"%PYTHON%" -m maturin develop --release
+echo       正在编译 wheel...
+if exist "target\wheels" ( del /q target\wheels\scanner_core-*.whl >nul 2>&1 )
+"%PYTHON%" -m maturin build --release
 if !errorlevel! neq 0 (
     echo [错误] Rust 扩展构建失败，请检查上方日志排查问题。
     popd
     pause
     exit /b 1
+)
+echo       正在安装 wheel...
+for %%W in (target\wheels\scanner_core-*.whl) do (
+    "%PYTHON%" -m pip install --force-reinstall "%%W" --quiet
+    if !errorlevel! neq 0 (
+        echo [错误] 安装 scanner_core wheel 失败: %%W
+        popd
+        pause
+        exit /b 1
+    )
+    echo       已安装: %%~nxW
 )
 popd
 echo       ✓ Rust 扩展构建成功
