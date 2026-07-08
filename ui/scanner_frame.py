@@ -270,8 +270,8 @@ class ScannerFrame(QWidget):
         export_btn.setMenu(export_menu)
         tb.addWidget(export_btn)
 
-        # AI 设置按钮
-        self._ai_btn = RoundButton(None, "AI", self._open_ai_settings,
+        # AI 手动分析按钮
+        self._ai_btn = RoundButton(None, "AI", self._manual_ai_analyze,
                                     bg=C["purple"], fg="#ffffff",
                                     hover_bg="#a855f7", padx=10)
         tb.addWidget(self._ai_btn)
@@ -1079,11 +1079,25 @@ class ScannerFrame(QWidget):
     # ══════════════════════════════════════════════════
 
     def _open_ai_settings(self):
-        """打开 AI 设置对话框"""
+        """打开 AI 设置对话框（保留兼容，不再从按钮调用）"""
         AISettingsDialog(self.root, self._ai_config)
         # 设置变更后立即生效
         if self._ai_config.is_configured and self.result and self._ai_config.auto_analyze:
             QTimer.singleShot(100, self._trigger_ai_analysis)
+
+    def _manual_ai_analyze(self):
+        """手动触发 AI 分析当前页"""
+        if not self._ai_config.is_configured:
+            QMessageBox.warning(
+                self, "AI Not Configured",
+                "Please configure AI settings first.\nGo to Settings tab."
+            )
+            return
+        if not self.result or self._total_items == 0:
+            QMessageBox.information(self, "No Data", "Please scan first.")
+            return
+        self._ai_analyzing = False  # 重置标志允许重新触发
+        self._trigger_ai_analysis()
 
     def _trigger_ai_analysis(self):
         """触发 AI 分析: 收集当前页及邻近页数据"""

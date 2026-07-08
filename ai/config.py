@@ -24,6 +24,7 @@ CONFIG_DIR = os.path.join(APP_DATA_DIR, 'config')
 SETTINGS_FILE = os.path.join(CONFIG_DIR, 'settings.json')
 CACHE_DIR = os.path.join(APP_DATA_DIR, 'cache')
 LOG_DIR = os.path.join(APP_DATA_DIR, 'logs')
+REPLAY_DIR = os.path.join(APP_DATA_DIR, 'replay')
 
 
 class AIConfig:
@@ -38,9 +39,12 @@ class AIConfig:
         self.cache_enabled: bool = True
         self.auto_analyze: bool = True
         self.max_concurrent: int = 3
+        self.replay_enabled: bool = False
+        self.think_enabled: bool = False
         self._config_path: str = SETTINGS_FILE
         self._cache_dir: str = CACHE_DIR
         self._log_dir: str = LOG_DIR
+        self._replay_dir: str = REPLAY_DIR
 
     @classmethod
     def instance(cls) -> 'AIConfig':
@@ -68,6 +72,8 @@ class AIConfig:
             self.cache_enabled = ai.get('cache_enabled', True)
             self.auto_analyze = ai.get('auto_analyze', True)
             self.max_concurrent = ai.get('max_concurrent', 3)
+            self.replay_enabled = ai.get('replay_enabled', False)
+            self.think_enabled = ai.get('think_enabled', False)
         except (json.JSONDecodeError, OSError):
             pass  # 配置文件损坏时保持默认值
 
@@ -82,6 +88,8 @@ class AIConfig:
                 'cache_enabled': self.cache_enabled,
                 'auto_analyze': self.auto_analyze,
                 'max_concurrent': self.max_concurrent,
+                'replay_enabled': self.replay_enabled,
+                'think_enabled': self.think_enabled,
             }
         }
         with open(self._config_path, 'w', encoding='utf-8') as f:
@@ -101,3 +109,8 @@ class AIConfig:
         """返回日志目录，不存在则创建"""
         os.makedirs(self._log_dir, exist_ok=True)
         return self._log_dir
+
+    def get_replay_dir(self) -> str:
+        """返回 replay 目录，不存在则创建"""
+        os.makedirs(self._replay_dir, exist_ok=True)
+        return self._replay_dir

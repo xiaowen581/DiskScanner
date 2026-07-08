@@ -1,45 +1,35 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-ui/ai_settings_dialog.py — AI 分析设置对话框
-提供 base_url、api_key、model 等配置界面
+ui/settings_frame.py — Settings 标签页 (PyQt5 版本)
+内嵌 AI 分析配置，替代模态对话框
 """
 
 from PyQt5.QtWidgets import (
-    QDialog, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit,
-    QCheckBox, QSpinBox, QFrame,
+    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit,
+    QCheckBox, QSpinBox, QFrame, QScrollArea,
 )
 from PyQt5.QtCore import Qt
 
 from ai.config import AIConfig
+from ui.theme import (
+    C, F_SMALL, F_TINY, F_MONO, F_BTN,
+    RoundButton, make_font,
+)
 
 
-class AISettingsDialog:
-    """AI 分析设置对话框"""
+class SettingsFrame(QWidget):
+    """Settings 标签页 — 包含 AI 分析配置"""
 
     def __init__(self, parent, config: AIConfig = None):
+        super().__init__(parent)
         self._config = config or AIConfig.instance()
-        self.result = False
-        self._build_and_show(parent)
+        self._build_ui()
 
-    def _build_and_show(self, parent):
-        from ui._base import RoundButton, _DIALOG_AUTO_DISMISS
-        if _DIALOG_AUTO_DISMISS:
-            self.result = True
-            self.win = None
-            return
-
-        from ui.theme import C, make_font, F_BTN, F_SMALL, F_BODY, F_TINY
-
-        dlg = QDialog(parent)
-        dlg.setWindowTitle("AI Analysis Settings")
-        dlg.resize(520, 420)
-        dlg.setMinimumSize(480, 380)
-        self.win = dlg
-
-        layout = QVBoxLayout(dlg)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(0)
+    def _build_ui(self):
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
 
         # ── Header ──
         hdr = QFrame()
@@ -47,57 +37,70 @@ class AISettingsDialog:
         hdr_layout = QVBoxLayout(hdr)
         hdr_layout.setSpacing(4)
 
-        title_lbl = QLabel("AI Analysis Settings")
+        title_lbl = QLabel("Settings")
         title_lbl.setStyleSheet(f"color: {C['accent']}; font-size: 14pt; font-weight: bold;")
         hdr_layout.addWidget(title_lbl)
 
-        desc_lbl = QLabel("Configure OpenAI API settings for file analysis")
+        desc_lbl = QLabel("Configure application settings")
         desc_lbl.setStyleSheet(f"color: {C['text2']}; font-size: 9pt;")
         hdr_layout.addWidget(desc_lbl)
 
-        layout.addWidget(hdr)
+        outer.addWidget(hdr)
 
-        # ── Content ──
-        content = QFrame()
+        # ── Scrollable content ──
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setStyleSheet("QScrollArea { border: none; background: transparent; }")
+
+        content = QWidget()
         content.setStyleSheet(f"background-color: {C['bg']};")
         content_layout = QVBoxLayout(content)
         content_layout.setContentsMargins(24, 20, 24, 16)
-        content_layout.setSpacing(14)
+        content_layout.setSpacing(20)
 
-        # API Base URL
-        url_row = self._create_field(
-            content, "API Base URL",
+        # ── AI Analysis 区域标题 ──
+        section_lbl = QLabel("AI Analysis")
+        section_lbl.setStyleSheet(
+            f"color: {C['accent']}; font-size: 11pt; font-weight: bold;")
+        content_layout.addWidget(section_lbl)
+
+        section_line = QFrame()
+        section_line.setFrameShape(QFrame.HLine)
+        section_line.setStyleSheet(f"color: {C['border']};")
+        section_line.setMaximumHeight(1)
+        content_layout.addWidget(section_line)
+
+        # ── API 配置字段 ──
+        self._url_entry = self._create_field(
+            content_layout, "API Base URL",
             "Leave empty for default OpenAI endpoint",
             self._config.base_url
         )
-        self._url_entry = url_row[1]
-        content_layout.addWidget(url_row[0])
 
-        # API Key
-        key_row = self._create_field(
-            content, "API Key",
+        self._key_entry = self._create_field(
+            content_layout, "API Key",
             "sk-... or your custom API key",
             self._config.api_key,
             echo_mode=QLineEdit.Password
         )
-        self._key_entry = key_row[1]
-        content_layout.addWidget(key_row[0])
 
-        # Model
-        model_row = self._create_field(
-            content, "Model",
+        self._model_entry = self._create_field(
+            content_layout, "Model",
             "e.g. gpt-4o-mini, gpt-4o",
             self._config.model
         )
-        self._model_entry = model_row[1]
-        content_layout.addWidget(model_row[0])
 
-        # Options
+        # ── 选项区 ──
         options_frame = QFrame()
         options_frame.setStyleSheet("background: transparent;")
         options_layout = QVBoxLayout(options_frame)
-        options_layout.setContentsMargins(0, 8, 0, 0)
+        options_layout.setContentsMargins(0, 4, 0, 0)
         options_layout.setSpacing(8)
+
+        opt_title = QLabel("Options")
+        opt_title.setStyleSheet(
+            f"color: {C['text']}; font-size: 10pt; font-weight: bold;")
+        options_layout.addWidget(opt_title)
 
         self._auto_cb = QCheckBox("Auto-analyze after scan")
         self._auto_cb.setChecked(self._config.auto_analyze)
@@ -134,30 +137,31 @@ class AISettingsDialog:
         options_layout.addLayout(conc_row)
 
         content_layout.addWidget(options_frame)
+
+        # ── Save 按钮行 ──
+        btn_row = QHBoxLayout()
+        btn_row.addStretch()
+
+        self._save_btn = RoundButton(
+            content, "Save", self._save_settings,
+            bg=C["accent"], fg="#ffffff", hover_bg="#79c0ff"
+        )
+        btn_row.addWidget(self._save_btn)
+        content_layout.addLayout(btn_row)
+
+        # ── 状态提示 ──
+        self._status_label = QLabel("")
+        self._status_label.setFont(make_font(F_SMALL))
+        self._status_label.setStyleSheet(f"color: {C['green']};")
+        content_layout.addWidget(self._status_label)
+
         content_layout.addStretch()
-        layout.addWidget(content, stretch=1)
 
-        # ── Button bar ──
-        btn_bar = QFrame()
-        btn_bar.setStyleSheet(f"background-color: {C['surface']}; padding: 14px;")
-        btn_layout = QHBoxLayout(btn_bar)
-        btn_layout.addStretch()
+        scroll.setWidget(content)
+        outer.addWidget(scroll, stretch=1)
 
-        cancel_btn = RoundButton(btn_bar, "Cancel", lambda: dlg.reject(),
-                                  bg=C["btn_bg"], fg=C["text"])
-        btn_layout.addWidget(cancel_btn)
-
-        save_btn = RoundButton(btn_bar, "Save", lambda: self._save(dlg),
-                                bg=C["accent"], fg="#ffffff", hover_bg="#79c0ff")
-        btn_layout.addWidget(save_btn)
-
-        layout.addWidget(btn_bar)
-
-        dlg.setStyleSheet(f"QDialog {{ background-color: {C['bg']}; }}")
-        self.result = (dlg.exec_() == QDialog.Accepted)
-
-    def _save(self, dlg):
-        """保存配置"""
+    def _save_settings(self):
+        """保存配置到 settings.json"""
         self._config.base_url = self._url_entry.text().strip()
         self._config.api_key = self._key_entry.text().strip()
         self._config.model = self._model_entry.text().strip() or "gpt-4o-mini"
@@ -167,14 +171,26 @@ class AISettingsDialog:
         self._config.think_enabled = self._think_cb.isChecked()
         self._config.max_concurrent = self._conc_spin.value()
         self._config.save()
-        dlg.accept()
+        self._status_label.setText("✓ Settings saved")
+        # 3 秒后清除提示
+        from PyQt5.QtCore import QTimer
+        QTimer.singleShot(3000, lambda: self._status_label.setText(""))
+
+    def reload_settings(self):
+        """从 AIConfig 重新加载当前值到界面"""
+        self._url_entry.setText(self._config.base_url)
+        self._key_entry.setText(self._config.api_key)
+        self._model_entry.setText(self._config.model)
+        self._auto_cb.setChecked(self._config.auto_analyze)
+        self._cache_cb.setChecked(self._config.cache_enabled)
+        self._replay_cb.setChecked(self._config.replay_enabled)
+        self._think_cb.setChecked(self._config.think_enabled)
+        self._conc_spin.setValue(self._config.max_concurrent)
 
     @staticmethod
-    def _create_field(parent, label_text, placeholder, value="",
+    def _create_field(parent_layout, label_text, placeholder, value="",
                       echo_mode=QLineEdit.Normal):
-        """创建标签 + 输入框行"""
-        from ui.theme import C, make_font, F_TINY, F_MONO
-
+        """创建标签 + 输入框行，添加到 parent_layout，返回 QLineEdit"""
         frame = QFrame()
         frame.setStyleSheet("background: transparent;")
         row = QVBoxLayout(frame)
@@ -192,4 +208,5 @@ class AISettingsDialog:
         entry.setEchoMode(echo_mode)
         row.addWidget(entry)
 
-        return frame, entry
+        parent_layout.addWidget(frame)
+        return entry

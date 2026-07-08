@@ -20,6 +20,7 @@ from PyQt5.QtCore import Qt
 from ui.theme import C, QSS, make_font
 from ui.scanner_frame import ScannerFrame
 from ui.docker_frame import DockerFrame
+from ui.settings_frame import SettingsFrame
 from ai.config import AIConfig
 
 import ui._base as _base
@@ -57,6 +58,10 @@ class DiskScannerApp:
         self.docker_frame = DockerFrame(self.notebook, self.root)
         self.notebook.addTab(self.docker_frame, "  Docker Manager  ")
 
+        # Tab 3: Settings
+        self.settings_frame = SettingsFrame(self.notebook)
+        self.notebook.addTab(self.settings_frame, "  Settings  ")
+
         # Lazy-load Docker tab on first view
         self._docker_loaded = False
         self.notebook.currentChanged.connect(self._on_tab_changed)
@@ -65,6 +70,9 @@ class DiskScannerApp:
         if idx == 1 and not self._docker_loaded:
             self.docker_frame.load_first()
             self._docker_loaded = True
+        elif idx == 2:
+            # 进入 Settings 标签页时刷新配置
+            self.settings_frame.reload_settings()
 
     def run(self):
         self.root.show()

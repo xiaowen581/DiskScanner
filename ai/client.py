@@ -35,6 +35,14 @@ class AITimeoutError(AIError):
     """请求超时"""
 
 
+class AIRequestError(AIError):
+    """请求失败，携带 prompt_messages 用于 replay 保存"""
+    def __init__(self, original_error, prompt_messages=None):
+        super().__init__(str(original_error))
+        self.original_error = original_error
+        self.prompt_messages = prompt_messages
+
+
 # ── Structured Outputs Schema ──
 
 class Deletability(str, Enum):
@@ -83,16 +91,19 @@ class AIClient:
 
         return self._client
 
-    def analyze_batch(self, items: list, scan_path: str) -> dict:
+    def analyze_batch(self, items: list, scan_path: str,
+                      return_prompt: bool = False):
         """
         分析一批文件/目录
 
         Args:
             items: FileNode 或 DirNode 列表 (最多200条)
             scan_path: 扫描根路径
+            return_prompt: 为 True 时返回 (messages, result_dict) 元组
 
         Returns:
-            dict: {"items": [{"path": ..., "description": ..., "deletability": ..., "reason": ...}, ...]}
+            dict: {"items": [...]}
+            或 tuple: (messages_list, result_dict) 当 return_prompt=True
 
         Raises:
             AINotConfiguredError: API Key 未配置
@@ -109,14 +120,29 @@ class AIClient:
 
         # 尝试 Structured Outputs
         try:
-            return self._call_structured(client, messages)
+            result = self._call_structured(client, messages)
         except Exception as e:
             err_str = str(e).lower()
             # 如果是不支持 Structured Outputs，降级到 json_object
             if "response_format" in err_str or "not supported" in err_str or "invalid" in err_str:
                 logger.info("Structured Outputs 不支持，降级到 json_object 模式")
-                return self._call_json_object(client, messages)
-            raise
+                try:
+                    result = self._call_json_object(client, messages)
+                except Exception as inner_e:
+                    raise AIRequestError(inner_e, messages) from inner_e
+            else:
+                raise AIRequestError(e, messages) from e
+
+        if return_prompt:
+            return messages, result
+        return result
+
+    def _call_kwargs(self) -> dict:
+        """构建可选的 extra_body 参数"""
+        kw = {}
+        if self._config.think_enabled:
+            kw["extra_body"] = {"think": True}
+        return kw
 
     def _call_structured(self, client, messages: list) -> dict:
         """使用 Structured Outputs (beta API)"""
@@ -128,6 +154,7 @@ class AIClient:
                 messages=messages,
                 response_format=AnalysisResponse,
                 temperature=0.1,
+                **self._call_kwargs(),
             )
             parsed = response.choices[0].message.parsed
             if parsed is None:
@@ -157,6 +184,7 @@ class AIClient:
                 messages=messages,
                 response_format={"type": "json_object"},
                 temperature=0.1,
+                **self._call_kwargs(),
             )
             content = response.choices[0].message.content
             if not content:

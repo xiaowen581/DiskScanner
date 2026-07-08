@@ -6,8 +6,9 @@ ai/ — DiskScanner AI 辅助分析模块
 """
 
 from ai.config import AIConfig
-from ai.client import AIClient, AIError, AINotConfiguredError, AINetworkError, AITimeoutError
+from ai.client import AIClient, AIError, AINotConfiguredError, AINetworkError, AITimeoutError, AIRequestError
 from ai.cache import AICache
+from ai.replay import AIReplay
 
 try:
     from ai.worker import AIWorker
@@ -18,9 +19,11 @@ __all__ = [
     'AIConfig',
     'AIClient',
     'AICache',
+    'AIReplay',
     'AIWorker',
     'AIError',
     'AINotConfiguredError',
     'AINetworkError',
     'AITimeoutError',
+    'AIRequestError',
 ]

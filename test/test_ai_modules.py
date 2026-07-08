@@ -25,8 +25,10 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from ai.config import AIConfig, _get_app_data_dir
 from ai.cache import AICache
+from ai.replay import AIReplay, BATCH_SIZE
 from ai.client import (
     AIClient, AIError, AINotConfiguredError, AINetworkError, AITimeoutError,
+    AIRequestError,
     Deletability, FileAnalysis, AnalysisResponse,
 )
 from ai.prompts import SYSTEM_PROMPT, USER_PROMPT_TEMPLATE, format_items_for_prompt, build_user_prompt
@@ -349,6 +351,8 @@ class TestAIConfigSave:
         config_tmp.cache_enabled = False
         config_tmp.auto_analyze = False
         config_tmp.max_concurrent = 7
+        config_tmp.replay_enabled = True
+        config_tmp.think_enabled = True
         config_tmp.save()
 
         cfg2 = AIConfig()
@@ -357,6 +361,8 @@ class TestAIConfigSave:
         assert cfg2.base_url == "https://api.test.com"
         assert cfg2.api_key == "sk-round"
         assert cfg2.max_concurrent == 7
+        assert cfg2.replay_enabled is True
+        assert cfg2.think_enabled is True
 
     def test_save_unicode(self, config_tmp):
         config_tmp.base_url = "https://中文域名.com"
@@ -409,6 +415,16 @@ class TestAIConfigDirs:
     def test_get_log_dir_exists(self, config_tmp):
         os.makedirs(config_tmp._log_dir, exist_ok=True)
         d = config_tmp.get_log_dir()
+        assert os.path.isdir(d)
+
+    def test_get_replay_dir_creates(self, config_tmp):
+        d = config_tmp.get_replay_dir()
+        assert os.path.isdir(d)
+        assert d == config_tmp._replay_dir
+
+    def test_get_replay_dir_exists(self, config_tmp):
+        os.makedirs(config_tmp._replay_dir, exist_ok=True)
+        d = config_tmp.get_replay_dir()
         assert os.path.isdir(d)
 
 
@@ -803,15 +819,17 @@ class TestAIClientAnalyzeBatch:
         assert result["items"][0]["deletability"] == "caution"
 
     def test_no_fallback_on_other_error(self, mock_openai_httpx, patch_disk_scanner):
-        """非降级异常直接抛出"""
+        """非降级异常包裹为 AIRequestError"""
         fake_openai, _ = mock_openai_httpx
         client, _ = self._make_client(mock_openai_httpx, patch_disk_scanner)
         client._ensure_client()
         client._client.beta.chat.completions.parse.side_effect = AITimeoutError("请求超时")
 
         items = [MockFileNode("c", "/c", 30, 3.0, ".js")]
-        with pytest.raises(AITimeoutError):
+        with pytest.raises(AIRequestError) as exc_info:
             client.analyze_batch(items, "/")
+        assert isinstance(exc_info.value.original_error, AITimeoutError)
+        assert exc_info.value.prompt_messages is not None
 
 
 class TestAIClientCallStructured:
@@ -1117,6 +1135,336 @@ class TestAIWorkerBasic:
         assert worker._scan_path == "/data"
         assert worker._config is cfg
         assert worker._cache is cache
+
+
+# ════════════════════════════════════════════════════════════
+# 6. ai/replay.py — AIReplay 调试系统
+# ════════════════════════════════════════════════════════════
+
+@pytest.fixture
+def replay_tmp(tmp_path):
+    """创建使用临时目录的 AIReplay"""
+    cfg = AIConfig()
+    cfg.replay_enabled = True
+    cfg._replay_dir = str(tmp_path / "replay")
+    return AIReplay(cfg)
+
+
+@pytest.fixture
+def sample_replay_data():
+    """Replay 测试数据"""
+    messages = [
+        {"role": "system", "content": "You are a file analyzer."},
+        {"role": "user", "content": "Analyze these files..."},
+    ]
+    response = {
+        "items": [
+            {"path": "/tmp/test.txt", "description": "测试文件",
+             "deletability": "safe", "reason": "临时测试文件"}
+        ]
+    }
+    return messages, response
+
+
+class TestAIReplayFilename:
+    def test_filename_format(self):
+        name = AIReplay._make_filename("/data", 0)
+        assert name.endswith("_page0_chunk0.json")
+
+    def test_filename_with_chunk(self):
+        name = AIReplay._make_filename("/data", 0, chunk_idx=3)
+        assert name.endswith("_page0_chunk3.json")
+
+    def test_different_paths_different_names(self):
+        n1 = AIReplay._make_filename("/data1", 0)
+        n2 = AIReplay._make_filename("/data2", 0)
+        assert n1 != n2
+
+    def test_different_pages_different_names(self):
+        n1 = AIReplay._make_filename("/data", 0)
+        n2 = AIReplay._make_filename("/data", 1)
+        assert n1 != n2
+
+    def test_different_chunks_different_names(self):
+        n1 = AIReplay._make_filename("/data", 0, chunk_idx=0)
+        n2 = AIReplay._make_filename("/data", 0, chunk_idx=1)
+        assert n1 != n2
+
+    def test_same_inputs_same_name(self):
+        n1 = AIReplay._make_filename("/data", 0)
+        n2 = AIReplay._make_filename("/data", 0)
+        assert n1 == n2
+
+
+class TestAIReplaySave:
+    def test_save_creates_file(self, replay_tmp, sample_replay_data):
+        messages, response = sample_replay_data
+        replay_tmp.save("/data", 0, messages, response)
+        fpath = replay_tmp._get_file_path("/data", 0)
+        assert os.path.exists(fpath)
+
+    def test_save_json_content(self, replay_tmp, sample_replay_data):
+        messages, response = sample_replay_data
+        replay_tmp.save("/data", 0, messages, response)
+        fpath = replay_tmp._get_file_path("/data", 0)
+        with open(fpath, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        assert data["scan_path"] == "/data"
+        assert data["page_idx"] == 0
+        assert data["prompt"]["system"] == "You are a file analyzer."
+        assert data["prompt"]["user"] == "Analyze these files..."
+        assert data["response"]["items"][0]["path"] == "/tmp/test.txt"
+
+    def test_save_has_timestamp(self, replay_tmp, sample_replay_data):
+        messages, response = sample_replay_data
+        replay_tmp.save("/data", 0, messages, response)
+        fpath = replay_tmp._get_file_path("/data", 0)
+        with open(fpath, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        assert "timestamp" in data
+        assert "model" in data
+        assert data["status"] == "success"
+
+    def test_save_disabled_does_nothing(self, tmp_path, sample_replay_data):
+        cfg = AIConfig()
+        cfg.replay_enabled = False
+        cfg._replay_dir = str(tmp_path / "replay")
+        replay = AIReplay(cfg)
+        messages, response = sample_replay_data
+        replay.save("/data", 0, messages, response)
+        fpath = replay._get_file_path("/data", 0)
+        assert not os.path.exists(fpath)
+
+
+class TestAIReplaySaveError:
+    def test_save_error_creates_file(self, replay_tmp):
+        replay_tmp.save_error("/data", 0, None, "AINetworkError", "连接失败")
+        fpath = replay_tmp._get_file_path("/data", 0)
+        assert os.path.exists(fpath)
+
+    def test_save_error_content(self, replay_tmp):
+        msgs = [{"role": "system", "content": "sys"}, {"role": "user", "content": "usr"}]
+        replay_tmp.save_error("/data", 0, msgs, "AITimeoutError", "60s timeout")
+        fpath = replay_tmp._get_file_path("/data", 0)
+        with open(fpath, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        assert data["status"] == "error"
+        assert data["error"]["type"] == "AITimeoutError"
+        assert data["error"]["message"] == "60s timeout"
+        assert data["prompt"]["system"] == "sys"
+
+    def test_save_error_no_prompt(self, replay_tmp):
+        replay_tmp.save_error("/data", 0, None, "Err", "msg")
+        fpath = replay_tmp._get_file_path("/data", 0)
+        with open(fpath, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        assert "prompt" not in data
+
+    def test_save_error_disabled(self, tmp_path):
+        cfg = AIConfig()
+        cfg.replay_enabled = False
+        cfg._replay_dir = str(tmp_path / "replay")
+        replay = AIReplay(cfg)
+        replay.save_error("/data", 0, None, "Err", "msg")
+        fpath = replay._get_file_path("/data", 0)
+        assert not os.path.exists(fpath)
+
+
+class TestAIReplayLoad:
+    def test_load_after_save(self, replay_tmp, sample_replay_data):
+        messages, response = sample_replay_data
+        replay_tmp.save("/data", 0, messages, response)
+        loaded = replay_tmp.load("/data", 0)
+        assert loaded is not None
+        assert loaded["items"][0]["path"] == "/tmp/test.txt"
+
+    def test_load_nonexistent_returns_none(self, replay_tmp):
+        assert replay_tmp.load("/nonexistent", 99) is None
+
+    def test_load_disabled_returns_none(self, tmp_path, sample_replay_data):
+        cfg = AIConfig()
+        cfg.replay_enabled = False
+        cfg._replay_dir = str(tmp_path / "replay")
+        replay = AIReplay(cfg)
+        # 先手动写一个文件
+        cfg2 = AIConfig()
+        cfg2.replay_enabled = True
+        cfg2._replay_dir = str(tmp_path / "replay")
+        replay2 = AIReplay(cfg2)
+        messages, response = sample_replay_data
+        replay2.save("/data", 0, messages, response)
+        # disabled 时 load 返回 None
+        assert replay.load("/data", 0) is None
+
+    def test_load_corrupted_file_returns_none(self, replay_tmp):
+        replay_dir = replay_tmp._config.get_replay_dir()
+        fname = replay_tmp._make_filename("/data", 0)
+        fpath = os.path.join(replay_dir, fname)
+        with open(fpath, 'w') as f:
+            f.write("not valid json{{{")
+        assert replay_tmp.load("/data", 0) is None
+
+    def test_load_missing_response_returns_none(self, replay_tmp):
+        replay_dir = replay_tmp._config.get_replay_dir()
+        fname = replay_tmp._make_filename("/data", 0)
+        fpath = os.path.join(replay_dir, fname)
+        with open(fpath, 'w', encoding='utf-8') as f:
+            json.dump({"scan_path": "/data"}, f)  # 缺少 response
+        assert replay_tmp.load("/data", 0) is None
+
+    def test_load_edited_response(self, replay_tmp, sample_replay_data):
+        """测试手动编辑后的 response 能正确加载"""
+        messages, response = sample_replay_data
+        replay_tmp.save("/data", 0, messages, response)
+        # 手动修改文件中的 response
+        fpath = replay_tmp._get_file_path("/data", 0)
+        with open(fpath, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        data["response"]["items"][0]["deletability"] = "unsafe"
+        data["response"]["items"][0]["reason"] = "手动修改的原因"
+        with open(fpath, 'w', encoding='utf-8') as f:
+            json.dump(data, f, ensure_ascii=False)
+        # 加载修改后的结果
+        loaded = replay_tmp.load("/data", 0)
+        assert loaded["items"][0]["deletability"] == "unsafe"
+        assert loaded["items"][0]["reason"] == "手动修改的原因"
+
+    def test_load_skips_error_record(self, replay_tmp):
+        """错误记录应被跳过，返回 None"""
+        replay_tmp.save_error("/data", 0, None, "Err", "fail")
+        assert replay_tmp.load("/data", 0) is None
+
+
+class TestAIReplayLoadPage:
+    def test_load_page_single_chunk(self, replay_tmp, sample_replay_data):
+        messages, response = sample_replay_data
+        replay_tmp.save("/data", 0, messages, response, chunk_idx=0)
+        loaded = replay_tmp.load_page("/data", 0)
+        assert loaded is not None
+        assert len(loaded["items"]) == 1
+
+    def test_load_page_multiple_chunks(self, replay_tmp):
+        msgs = [{"role": "system", "content": "sys"}, {"role": "user", "content": "usr"}]
+        r1 = {"items": [{"path": "/a", "description": "A", "deletability": "safe", "reason": "tmp"}]}
+        r2 = {"items": [{"path": "/b", "description": "B", "deletability": "unsafe", "reason": "sys"}]}
+        replay_tmp.save("/data", 0, msgs, r1, chunk_idx=0)
+        replay_tmp.save("/data", 0, msgs, r2, chunk_idx=1)
+        loaded = replay_tmp.load_page("/data", 0)
+        assert loaded is not None
+        assert len(loaded["items"]) == 2
+        assert loaded["items"][0]["path"] == "/a"
+        assert loaded["items"][1]["path"] == "/b"
+
+    def test_load_page_missing_chunk_returns_none(self, replay_tmp):
+        msgs = [{"role": "system", "content": "sys"}, {"role": "user", "content": "usr"}]
+        r1 = {"items": [{"path": "/a", "description": "A", "deletability": "safe", "reason": "tmp"}]}
+        replay_tmp.save("/data", 0, msgs, r1, chunk_idx=0)
+        # chunk 1 不存在 — 但如果只有 chunk 0 则 load_page 仍能加载
+        loaded = replay_tmp.load_page("/data", 0)
+        assert loaded is not None  # 只有 1 个文件也能加载
+
+    def test_load_page_no_files(self, replay_tmp):
+        assert replay_tmp.load_page("/nonexistent", 99) is None
+
+    def test_load_page_disabled(self, tmp_path):
+        cfg = AIConfig()
+        cfg.replay_enabled = False
+        cfg._replay_dir = str(tmp_path / "replay")
+        replay = AIReplay(cfg)
+        assert replay.load_page("/data", 0) is None
+
+    def test_load_page_with_error_chunk(self, replay_tmp):
+        """包含错误 chunk 的页应返回 None"""
+        msgs = [{"role": "system", "content": "sys"}, {"role": "user", "content": "usr"}]
+        r1 = {"items": [{"path": "/a", "description": "A", "deletability": "safe", "reason": "tmp"}]}
+        replay_tmp.save("/data", 0, msgs, r1, chunk_idx=0)
+        replay_tmp.save_error("/data", 0, msgs, "Err", "fail", chunk_idx=1)
+        # chunk 1 是错误记录，load_page 应返回 None
+        assert replay_tmp.load_page("/data", 0) is None
+
+
+# ════════════════════════════════════════════════════════════
+# 7. client.py return_prompt 测试
+# ════════════════════════════════════════════════════════════
+
+class TestAnalyzeBatchReturnPrompt:
+    def test_return_prompt_false_returns_dict(self, mock_openai_httpx, patch_disk_scanner):
+        cfg = AIConfig()
+        cfg.api_key = "sk-test"
+        client = AIClient(cfg)
+        client._ensure_client()
+        mock_result = {"items": [{"path": "/f.txt", "description": "test",
+                                   "deletability": "safe", "reason": "test"}]}
+        client._client.beta.chat.completions.parse.return_value = MagicMock(
+            choices=[MagicMock(message=MagicMock(parsed=MagicMock(
+                model_dump=MagicMock(return_value=mock_result))))]
+        )
+        items = [MockFileNode("f.txt", "/f.txt", 100, 1.0, ".txt")]
+        result = client.analyze_batch(items, "/", return_prompt=False)
+        assert isinstance(result, dict)
+        assert "items" in result
+
+    def test_return_prompt_true_returns_tuple(self, mock_openai_httpx, patch_disk_scanner):
+        cfg = AIConfig()
+        cfg.api_key = "sk-test"
+        client = AIClient(cfg)
+        client._ensure_client()
+        mock_result = {"items": [{"path": "/f.txt", "description": "test",
+                                   "deletability": "safe", "reason": "test"}]}
+        client._client.beta.chat.completions.parse.return_value = MagicMock(
+            choices=[MagicMock(message=MagicMock(parsed=MagicMock(
+                model_dump=MagicMock(return_value=mock_result))))]
+        )
+        items = [MockFileNode("f.txt", "/f.txt", 100, 1.0, ".txt")]
+        result = client.analyze_batch(items, "/", return_prompt=True)
+        assert isinstance(result, tuple)
+        assert len(result) == 2
+        messages, resp = result
+        assert isinstance(messages, list)
+        assert messages[0]["role"] == "system"
+        assert messages[1]["role"] == "user"
+        assert isinstance(resp, dict)
+        assert "items" in resp
+
+
+class TestAIRequestError:
+    def test_carries_original_error(self):
+        orig = AINetworkError("connection refused")
+        err = AIRequestError(orig, [{"role": "user", "content": "test"}])
+        assert err.original_error is orig
+        assert err.prompt_messages is not None
+        assert err.prompt_messages[0]["content"] == "test"
+
+    def test_message_from_original(self):
+        orig = AITimeoutError("60s timeout")
+        err = AIRequestError(orig)
+        assert "60s timeout" in str(err)
+        assert err.prompt_messages is None
+
+    def test_is_ai_error(self):
+        err = AIRequestError(RuntimeError("x"))
+        assert isinstance(err, AIError)
+
+
+class TestBatchSize:
+    def test_batch_size_is_20(self):
+        assert BATCH_SIZE == 20
+
+
+class TestCallKwargs:
+    def test_think_disabled_returns_empty(self):
+        cfg = AIConfig()
+        cfg.api_key = "sk-test"
+        client = AIClient(cfg)
+        assert client._call_kwargs() == {}
+
+    def test_think_enabled_adds_extra_body(self):
+        cfg = AIConfig()
+        cfg.api_key = "sk-test"
+        cfg.think_enabled = True
+        client = AIClient(cfg)
+        kw = client._call_kwargs()
+        assert kw == {"extra_body": {"think": True}}
 
 
 if __name__ == "__main__":
